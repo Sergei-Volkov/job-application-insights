@@ -1,6 +1,6 @@
-# Job Application Insights (Portfolio MVP)
+# Job Application Insights
 
-A fullstack showcase: Python API + React dashboard — built around real job-search data.
+A job application tracking and analytics system with a Python API and React dashboard.
 
 ## Stack
 - Backend: FastAPI + SQLAlchemy + Pydantic Settings (Python)
@@ -112,16 +112,15 @@ curl -X POST http://localhost:8000/run-discovery \
 |---|---|---|
 | `DATABASE_URL` | `sqlite:///./app.db` | SQLAlchemy connection string |
 | `CSV_PATH` | `data/job_applications_sample.csv` | Path to CSV used for first-run DB seeding |
-| `DEFAULT_MISSING_SKILLS` | `dbt,BigQuery,...` | Fallback skill list when notes lack gap markers |
+| `DEFAULT_MISSING_SKILLS` | `Kubernetes,Redis,...` | Fallback skill list when notes lack gap markers |
 | `CORS_ORIGINS` | `*` | Comma-separated allowed frontend origins |
 | `DISCOVERY_SCRIPT_PATH` | `discovery/job_finder.py` | Discovery script path inside this repo |
 | `DISCOVERY_CV_PATH` | _(empty)_ | Required: path to your CV passed to discovery |
 | `DISCOVERY_API_BASE_URL` | `http://127.0.0.1:8000` | API base URL used by the discovery script for upserts |
 
-## Demo flow (for interviews)
-1. Open dashboard — show live data from your real tracker
-2. Walk through the skill gaps chart — explain how it drives your upskilling roadmap
-3. Show the weekly trend chart — demonstrates time-series reasoning
-4. Open `/docs` — show auto-generated API docs from Pydantic schemas
-5. Mention: FastAPI startup event seeds SQLite from CSV, zero manual setup needed
+## Operational Notes
+1. The API starts with SQLite and seeds data from `CSV_PATH` only when the database is empty.
+2. `/run-discovery` requires `DISCOVERY_CV_PATH` to be configured and point to an existing file.
+3. The frontend reads and writes application state through `/api/*` proxied to the backend.
+4. OpenAPI docs are available at `/docs` and `/redoc`.
 
