@@ -1,10 +1,15 @@
 import os
 from pathlib import Path
+import sys
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 _TMP_DIR = Path(__file__).resolve().parent / ".tmp"
+_BACKEND_ROOT = Path(__file__).resolve().parents[1]
+if str(_BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_ROOT))
+
 _TMP_DIR.mkdir(parents=True, exist_ok=True)
 _SEED_CSV = _TMP_DIR / "seed.csv"
 _CV_PATH = _TMP_DIR / "cv.tex"
