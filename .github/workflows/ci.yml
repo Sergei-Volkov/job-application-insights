@@ -31,6 +31,9 @@ jobs:
       - name: Compile backend package
         run: python -m compileall app
 
+      - name: Run backend tests
+        run: pytest -q
+
   frontend:
     name: Frontend Build
     runs-on: ubuntu-latest
