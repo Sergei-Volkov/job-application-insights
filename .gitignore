@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+
+# Runtime / secrets
+.env
+*.db
+db/
+
+# OS
+.DS_Store
+Thumbs.db

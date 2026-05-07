@@ -1,0 +1,34 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      # Seed CSV — override by mounting your own file here.
+      - ./data/job_applications_sample.csv:/data/job_applications.csv:ro
+      # Mount the discovery script and resumes (read-only) so /run-discovery works.
+      # DISCOVERY_CV_PATH must point to a CV file; mount one here or set the env var.
+      # Example: - /path/to/your/CV.tex:/cv/CV.tex:ro
+      # Persist the SQLite database across container restarts.
+      - db_data:/app/db
+    environment:
+      DATABASE_URL: sqlite:////app/db/app.db
+      CSV_PATH: /data/job_applications.csv
+      DISCOVERY_SCRIPT_PATH: /app/discovery/job_finder.py
+      # Set DISCOVERY_CV_PATH to the path inside the container where your CV is mounted.
+      # DISCOVERY_CV_PATH: /cv/CV.tex
+    env_file:
+      - path: .env
+        required: false
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  db_data:

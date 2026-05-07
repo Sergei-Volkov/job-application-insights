@@ -1,0 +1,8 @@
+# Build artifacts (copied from build stage, not needed for context)
+dist/
+node_modules/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store

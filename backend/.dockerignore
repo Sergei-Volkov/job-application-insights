@@ -1,0 +1,17 @@
+# Never bake secrets or local state into the image
+.env
+*.env
+
+# Local SQLite DB
+*.db
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store

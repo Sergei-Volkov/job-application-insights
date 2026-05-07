@@ -1,0 +1,5 @@
+selected,date_found,date_applied,company,role,location,source,remote_type,fit,fit_score,link,status,next_step,follow_up_date,notes
+no,2026-04-01,,Northwind Labs,Backend Engineer,Remote,Example Board,Remote,Strong,18,https://example.com/jobs/101,To review,Review role requirements,,"Strong overlap on backend APIs and database work. missing or adjacent tools: Kubernetes, Redis."
+no,2026-04-04,,Blue Harbor,Full-Stack Developer,Berlin,Example Board,Hybrid,Medium,12,https://example.com/jobs/102,To review,Prepare portfolio examples,,"Good overlap on TypeScript and frontend delivery. missing or adjacent tools: GraphQL, Cypress."
+no,2026-04-06,2026-04-09,Orbit Systems,Platform Engineer,Remote,Example Board,Remote,Medium,10,https://example.com/jobs/103,Applied,Wait for recruiter response,2026-04-18,"Experience aligns with infrastructure automation. missing or adjacent tools: Helm, Terraform."
+no,2026-04-08,,Granite Health,Software Engineer,London,Example Board,Onsite,Stretch,7,https://example.com/jobs/104,Saved,Revisit after interview prep,,"General software overlap with lower domain match. missing or adjacent tools: HL7, FHIR."
