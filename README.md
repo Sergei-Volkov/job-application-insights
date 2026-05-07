@@ -113,14 +113,19 @@ curl -X POST http://localhost:8000/run-discovery \
 | `DATABASE_URL` | `sqlite:///./app.db` | SQLAlchemy connection string |
 | `CSV_PATH` | `data/job_applications_sample.csv` | Path to CSV used for first-run DB seeding |
 | `DEFAULT_MISSING_SKILLS` | `Kubernetes,Redis,...` | Fallback skill list when notes lack gap markers |
-| `CORS_ORIGINS` | `*` | Comma-separated allowed frontend origins |
+| `CORS_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | Comma-separated allowed frontend origins |
+| `CORS_ALLOW_CREDENTIALS` | `false` | Enables credentialed CORS requests |
+| `WRITE_API_KEY` | _(empty)_ | Optional API key required for write/execute endpoints (`X-API-Key`) |
 | `DISCOVERY_SCRIPT_PATH` | `discovery/job_finder.py` | Discovery script path inside this repo |
 | `DISCOVERY_CV_PATH` | _(empty)_ | Required: path to your CV passed to discovery |
 | `DISCOVERY_API_BASE_URL` | `http://127.0.0.1:8000` | API base URL used by the discovery script for upserts |
+| `DISCOVERY_LOG_MAX_CHARS` | `3000` | Max stdout/stderr chars returned by `/run-discovery` |
 
 ## Operational Notes
 1. The API starts with SQLite and seeds data from `CSV_PATH` only when the database is empty.
 2. `/run-discovery` requires `DISCOVERY_CV_PATH` to be configured and point to an existing file.
-3. The frontend reads and writes application state through `/api/*` proxied to the backend.
-4. OpenAPI docs are available at `/docs` and `/redoc`.
+3. If `WRITE_API_KEY` is configured, send it via `X-API-Key` for `POST`/`PATCH` write endpoints.
+4. `/run-discovery` response logs are summarized and truncated by `DISCOVERY_LOG_MAX_CHARS`.
+5. The frontend reads and writes application state through `/api/*` proxied to the backend.
+6. OpenAPI docs are available at `/docs` and `/redoc`.
 

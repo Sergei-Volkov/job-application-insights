@@ -2,14 +2,16 @@ from collections import Counter
 from contextlib import asynccontextmanager
 import csv
 from datetime import datetime
+import hmac
 from pathlib import Path
 import subprocess
 import sys
 from typing import Iterator
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import and_, func, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .config import settings
@@ -57,7 +59,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_credentials=True,
+    allow_credentials=settings.cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -69,6 +71,14 @@ def get_db() -> Iterator[Session]:
         yield db
     finally:
         db.close()
+
+
+def require_write_access(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -> None:
+    expected = settings.write_api_key.strip()
+    if not expected:
+        return
+    if not x_api_key or not hmac.compare_digest(x_api_key, expected):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing X-API-Key")
 
 
 def tracker_path() -> Path:
@@ -130,6 +140,14 @@ def ensure_columns(db: Session) -> None:
     for column, sql_type in wanted.items():
         if column not in existing:
             db.execute(text(f"ALTER TABLE job_applications ADD COLUMN {column} {sql_type}"))
+
+    # Keep link-based upsert idempotent and race-safe when link is available.
+    db.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_job_applications_link_nonempty "
+            "ON job_applications(link) WHERE link <> ''"
+        )
+    )
     db.commit()
 
 
@@ -254,7 +272,9 @@ def list_applications(
     query = db.query(JobApplication)
 
     if status:
-        query = query.filter(JobApplication.status.ilike(status))
+        normalized = status.strip().lower()
+        if normalized:
+            query = query.filter(func.lower(JobApplication.status) == normalized)
     if min_fit_score is not None:
         query = query.filter(JobApplication.fit_score >= min_fit_score)
 
@@ -268,17 +288,32 @@ def list_applications(
     summary="Create or update one application",
     description="Upserts one application by link, or by company + role when link is missing.",
 )
-def upsert_application(payload: JobApplicationUpsert, db: Session = Depends(get_db)) -> JobApplicationOut:
+def upsert_application(
+    payload: JobApplicationUpsert,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_write_access),
+) -> JobApplicationOut:
+    payload_data = payload.model_dump()
     record = find_existing_application(db, company=payload.company, role=payload.role, link=payload.link)
 
     if record is None:
-        record = JobApplication(**payload.model_dump())
+        record = JobApplication(**payload_data)
         db.add(record)
     else:
-        for field, value in payload.model_dump().items():
+        for field, value in payload_data.items():
             setattr(record, field, value)
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        record = find_existing_application(db, company=payload.company, role=payload.role, link=payload.link)
+        if record is None:
+            raise HTTPException(status_code=409, detail="Conflict while upserting application")
+        for field, value in payload_data.items():
+            setattr(record, field, value)
+        db.commit()
+
     db.refresh(record)
     return record
 
@@ -290,7 +325,10 @@ def upsert_application(payload: JobApplicationUpsert, db: Session = Depends(get_
     summary="Patch editable fields on one application",
 )
 def patch_application(
-    application_id: int, payload: JobApplicationUpdate, db: Session = Depends(get_db)
+    application_id: int,
+    payload: JobApplicationUpdate,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_write_access),
 ) -> JobApplicationOut:
     record = db.query(JobApplication).filter(JobApplication.id == application_id).first()
     if record is None:
@@ -311,8 +349,25 @@ def patch_application(
     tags=["imports"],
     summary="Import or refresh rows from CSV",
 )
-def sync_from_csv_endpoint(db: Session = Depends(get_db)) -> SyncResult:
+def sync_from_csv_endpoint(
+    db: Session = Depends(get_db),
+    _: None = Depends(require_write_access),
+) -> SyncResult:
     return sync_from_csv(db)
+
+
+def _summarize_process_output(text: str, max_chars: int) -> str:
+    text = text.strip()
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+
+    head = max_chars // 2
+    tail = max_chars - head
+    marker = "\n\n... output truncated ...\n\n"
+    tail = max(tail - len(marker), 0)
+    return f"{text[:head]}{marker}{text[-tail:]}"
 
 
 @app.post(
@@ -322,7 +377,7 @@ def sync_from_csv_endpoint(db: Session = Depends(get_db)) -> SyncResult:
     summary="Trigger the external discovery script",
     description="Runs the existing job finder script and lets it upsert discovered roles back into this API.",
 )
-def run_discovery(payload: DiscoveryRunRequest) -> DiscoveryRunResult:
+def run_discovery(payload: DiscoveryRunRequest, _: None = Depends(require_write_access)) -> DiscoveryRunResult:
     if not settings.discovery_cv_path.strip():
         raise HTTPException(
             status_code=400,
@@ -370,8 +425,8 @@ def run_discovery(payload: DiscoveryRunRequest) -> DiscoveryRunResult:
     return DiscoveryRunResult(
         exit_code=completed.returncode,
         command=command,
-        stdout=completed.stdout.strip(),
-        stderr=completed.stderr.strip(),
+        stdout=_summarize_process_output(completed.stdout, settings.discovery_log_max_chars),
+        stderr=_summarize_process_output(completed.stderr, settings.discovery_log_max_chars),
     )
 
 

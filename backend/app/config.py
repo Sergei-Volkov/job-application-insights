@@ -14,14 +14,20 @@ class Settings(BaseSettings):
     # Comma-separated fallback skill list shown when notes contain no gap markers.
     default_missing_skills: str = "Kubernetes,Redis,GraphQL,Cypress,Terraform,CI/CD"
 
-    # Comma-separated allowed CORS origins. Use * to allow all (dev only).
-    cors_origins: list[str] = ["*"]
+    # Comma-separated allowed CORS origins.
+    cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    cors_allow_credentials: bool = False
+
+    # Optional API key for write/execute endpoints.
+    # When empty, write endpoints remain open (convenient for local development).
+    write_api_key: str = ""
 
     # Discovery integration: path to the existing finder script and CV file.
     discovery_script_path: str = "discovery/job_finder.py"
     # CV path has no default — set DISCOVERY_CV_PATH in your .env or environment.
     discovery_cv_path: str = ""
     discovery_api_base_url: str = "http://127.0.0.1:8000"
+    discovery_log_max_chars: int = 3000
 
     @field_validator("cors_origins", mode="before")
     @classmethod

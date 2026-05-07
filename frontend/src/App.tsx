@@ -274,7 +274,7 @@ export default function App() {
                           className="text-input"
                           value={row.cover_letter_ref || ''}
                           onChange={(e) => patchLocal(row.id, { cover_letter_ref: e.target.value })}
-                          placeholder="vacancies/.../cover_letter.md"
+                          placeholder="cover_letter_v2.md"
                         />
                       </td>
                       <td>
