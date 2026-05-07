@@ -3,6 +3,15 @@
 // - In Docker: nginx reverse proxy (nginx.conf)
 
 const BASE = '/api'
+const WRITE_API_KEY = (import.meta.env.VITE_WRITE_API_KEY as string | undefined)?.trim()
+
+function writeHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (WRITE_API_KEY) {
+    headers['X-API-Key'] = WRITE_API_KEY
+  }
+  return headers
+}
 
 export interface Stats {
   total_applications: number
@@ -75,7 +84,7 @@ async function apiFetch<T>(path: string): Promise<T> {
 async function apiPatch<T>(path: string, payload: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: writeHeaders(),
     body: JSON.stringify(payload),
   })
   if (!res.ok) throw new Error(`API error: ${res.status} ${path}`)
@@ -85,7 +94,7 @@ async function apiPatch<T>(path: string, payload: unknown): Promise<T> {
 async function apiPost<T>(path: string, payload?: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: writeHeaders(),
     body: payload === undefined ? undefined : JSON.stringify(payload),
   })
   if (!res.ok) throw new Error(`API error: ${res.status} ${path}`)

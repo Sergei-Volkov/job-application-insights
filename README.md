@@ -1,5 +1,7 @@
 # Job Application Insights
 
+[![CI](https://github.com/Sergei-Volkov/job-application-insights/actions/workflows/ci.yml/badge.svg)](https://github.com/Sergei-Volkov/job-application-insights/actions/workflows/ci.yml)
+
 A job application tracking and analytics system with a Python API and React dashboard.
 
 ## Stack
@@ -37,6 +39,7 @@ uvicorn app.main:app --reload
 # Frontend (separate terminal)
 cd frontend
 npm install
+cp .env.example .env         # optional: set VITE_WRITE_API_KEY to match backend WRITE_API_KEY
 npm run dev                   # http://localhost:5173
 ```
 
@@ -125,6 +128,7 @@ curl -X POST http://localhost:8000/run-discovery \
 1. The API starts with SQLite and seeds data from `CSV_PATH` only when the database is empty.
 2. `/run-discovery` requires `DISCOVERY_CV_PATH` to be configured and point to an existing file.
 3. If `WRITE_API_KEY` is configured, send it via `X-API-Key` for `POST`/`PATCH` write endpoints.
+	: for frontend dev, set `VITE_WRITE_API_KEY` in `frontend/.env`.
 4. `/run-discovery` response logs are summarized and truncated by `DISCOVERY_LOG_MAX_CHARS`.
 5. The frontend reads and writes application state through `/api/*` proxied to the backend.
 6. OpenAPI docs are available at `/docs` and `/redoc`.

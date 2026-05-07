@@ -60,6 +60,14 @@ def _clear_db() -> None:
         db.commit()
 
 
+def _write_seed_rows(rows: list[str]) -> None:
+    header = "selected,date_found,date_applied,company,role,location,source,remote_type,fit,fit_score,link,status,next_step,follow_up_date,notes\n"
+    body = "\n".join(rows)
+    if body:
+        body += "\n"
+    _SEED_CSV.write_text(header + body, encoding="utf-8")
+
+
 def test_write_endpoints_require_api_key() -> None:
     _clear_db()
 
@@ -114,3 +122,20 @@ def test_run_discovery_output_is_summarized() -> None:
     assert "output truncated" in data["stderr"]
     assert len(data["stdout"]) <= 80
     assert len(data["stderr"]) <= 80
+
+
+def test_sync_from_csv_is_idempotent() -> None:
+    _clear_db()
+    _write_seed_rows(
+        [
+            "no,2026-04-11,,Northwind Labs,Backend Engineer,Remote,Example Board,Remote,Strong,17,https://example.com/jobs/sync-1,To review,Review role requirements,,note"
+        ]
+    )
+
+    first = client.post("/sync-from-csv", headers=_auth_headers())
+    assert first.status_code == 200
+    assert first.json() == {"added": 1, "updated": 0}
+
+    second = client.post("/sync-from-csv", headers=_auth_headers())
+    assert second.status_code == 200
+    assert second.json() == {"added": 0, "updated": 1}
