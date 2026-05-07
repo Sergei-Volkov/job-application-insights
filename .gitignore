@@ -13,6 +13,7 @@ dist/
 .env
 *.db
 db/
+backend/tests/.tmp/
 
 # OS
 .DS_Store
