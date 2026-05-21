@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import time
 
-from job_finder_shared import (
+from shared import (
     ApiUpsertFailure,
     CollectionReport,
     DEFAULT_API_WRITE_KEY,

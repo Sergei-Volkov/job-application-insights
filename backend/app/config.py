@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     generated_document_author: str = ""
 
     # Discovery script settings.
-    discovery_script_path: str = "discovery/job_finder.py"
+    discovery_script_path: str = "discovery/cli.py"
     discovery_cv_path: str = ""
     discovery_api_base_url: str = "http://127.0.0.1:8000"
     discovery_log_max_chars: int = 3000

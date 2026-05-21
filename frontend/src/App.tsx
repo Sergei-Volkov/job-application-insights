@@ -869,7 +869,7 @@ export default function App() {
                       value={discoveryApiBaseUrl}
                       onChange={(e) => setDiscoveryApiBaseUrl(e.target.value)}
                       style={{ minWidth: '240px', flex: 1 }}
-                      title="Optional override passed to job_finder --api-base-url."
+                      title="Optional override passed to discovery CLI --api-base-url."
                     />
                     <label className="toolbar-label" title="Enable verbose source diagnostics in discovery output.">
                       <input

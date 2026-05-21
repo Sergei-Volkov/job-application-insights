@@ -78,7 +78,7 @@ Discovery rerun behavior:
 | `CORS_ORIGINS` | `[...]` | Allowed frontend origins |
 | `WRITE_API_KEY` | _(empty)_ | Optional key for write endpoints |
 | `REQUIRE_WRITE_KEY` | `false` | Require `X-API-Key` when true |
-| `DISCOVERY_SCRIPT_PATH` | `discovery/job_finder.py` | Discovery script location |
+| `DISCOVERY_SCRIPT_PATH` | `discovery/cli.py` | Discovery script location |
 | `DISCOVERY_CV_PATH` | _(empty)_ | Fallback CV path for discovery runs |
 | `APPLICATIONS_ROOT` | `applications` | Root for generated docs and file APIs |
 | `VACANCIES_TEMPLATE_DIR` | `vacancies/_template` | Template dir relative to `APPLICATIONS_ROOT` (or absolute path) |

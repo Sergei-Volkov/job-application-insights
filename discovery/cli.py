@@ -3,10 +3,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import job_finder_outputs as outputs
-import job_finder_shared as shared
-from job_finder_shared import DEFAULT_API_BASE_URL, DEFAULT_API_WRITE_KEY
-from job_finder_sources import collect_matches
+import outputs
+import shared
+from shared import DEFAULT_API_BASE_URL, DEFAULT_API_WRITE_KEY
+from sources import collect_matches
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = APP_ROOT.parent if (APP_ROOT.parent / "applications").exists() else APP_ROOT

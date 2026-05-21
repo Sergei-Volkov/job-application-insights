@@ -4,7 +4,7 @@ import json
 import xml.etree.ElementTree as ET
 from urllib.parse import quote_plus
 
-from job_finder_shared import (
+from shared import (
     ARBEITNOW_API,
     JOBICY_FEED,
     REMOTIVE_API,
