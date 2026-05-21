@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./app.db"
 
     # Fallback skill list used when notes contain no gap markers.
-    default_missing_skills: str = "Kubernetes,Redis,GraphQL,Cypress,Terraform,CI/CD"
+    default_missing_skills: str = ""
 
     # Allowed CORS origins.
     cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
