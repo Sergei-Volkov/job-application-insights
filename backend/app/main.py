@@ -6,32 +6,25 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-from typing import Iterator
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import and_, func, inspect
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
 from .config import settings
 from .dependencies import get_db, require_write_access
-from .database import SessionLocal, engine
+from .database import engine
 from .init_db import init_db
 from .models import JobApplication
 from .routers.analytics import router as analytics_router
+from .routers.applications import router as applications_router
 from .routers.system import router as system_router
 from .schemas import (
     DiscoveryRunRequest,
     DiscoveryRunResult,
     GenerateDocumentsRequest,
     GenerateDocumentsResult,
-    JobApplicationOut,
-    JobApplicationUpdate,
-    JobApplicationUpsert,
-    SkillGapList,
-    StatsOut,
-    TrendList,
     WorkspaceFileReadResult,
     WorkspaceFileWriteRequest,
 )
@@ -73,6 +66,7 @@ app.add_middleware(
 
 app.include_router(system_router)
 app.include_router(analytics_router)
+app.include_router(applications_router)
 
 
 def project_root() -> Path:
@@ -184,204 +178,6 @@ def _render_vacancy_notes(template_text: str, record: JobApplication) -> str:
         )
         + f"\n\n## Metadata\n- Date found: {date_found}\n- Fit score: {record.fit_score}\n- Fit label: {record.fit or 'n/a'}\n"
     )
-
-
-def _normalize_key(value: str | None) -> str:
-    return (value or "").strip().lower()
-
-
-def find_existing_application(db: Session, company: str, role: str, link: str) -> JobApplication | None:
-    existing = None
-    if link:
-        existing = db.query(JobApplication).filter(JobApplication.link == link).first()
-    if existing is not None:
-        return existing
-
-    return (
-        db.query(JobApplication)
-        .filter(
-            and_(
-                func.lower(JobApplication.company) == _normalize_key(company),
-                func.lower(JobApplication.role) == _normalize_key(role),
-            )
-        )
-        .first()
-    )
-
-
-@app.get(
-    "/applications",
-    response_model=list[JobApplicationOut],
-    tags=["applications"],
-    summary="List tracked job applications",
-)
-def list_applications(
-    status: str | None = Query(default=None),
-    min_fit_score: int | None = Query(default=None),
-    limit: int = Query(default=50, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
-    db: Session = Depends(get_db),
-) -> list[JobApplicationOut]:
-    query = db.query(JobApplication)
-
-    if status:
-        normalized = status.strip().lower()
-        if normalized:
-            query = query.filter(func.lower(JobApplication.status) == normalized)
-    if min_fit_score is not None:
-        query = query.filter(JobApplication.fit_score >= min_fit_score)
-
-    return query.order_by(JobApplication.fit_score.desc(), JobApplication.id.asc()).offset(offset).limit(limit).all()
-
-
-@app.post(
-    "/applications",
-    response_model=JobApplicationOut,
-    status_code=status.HTTP_201_CREATED,
-    tags=["applications"],
-    summary="Create one application",
-    description="Creates a new application and rejects duplicates by link or by company + role.",
-)
-def create_application(
-    payload: JobApplicationUpsert,
-    db: Session = Depends(get_db),
-    _: None = Depends(require_write_access),
-) -> JobApplicationOut:
-    existing = find_existing_application(db, company=payload.company, role=payload.role, link=payload.link)
-    if existing is not None:
-        raise HTTPException(status_code=409, detail="Application already exists")
-
-    payload_data = payload.model_dump()
-    today = _today_iso()
-
-    if not payload_data.get("first_seen_at"):
-        payload_data["first_seen_at"] = today
-    if not payload_data.get("last_seen_at"):
-        payload_data["last_seen_at"] = today
-    if not payload_data.get("listing_fingerprint"):
-        payload_data["listing_fingerprint"] = _listing_fingerprint(
-            [
-                payload_data.get("company", ""),
-                payload_data.get("role", ""),
-                payload_data.get("link", ""),
-                payload_data.get("source", ""),
-                payload_data.get("fit", ""),
-                str(payload_data.get("fit_score", "")),
-                payload_data.get("notes", ""),
-            ]
-        )
-
-    record = JobApplication(**payload_data)
-    db.add(record)
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=409, detail="Application already exists")
-
-    db.refresh(record)
-    return record
-
-
-@app.post(
-    "/applications/upsert",
-    response_model=JobApplicationOut,
-    tags=["imports", "applications"],
-    summary="Create or update one application",
-    description="Upserts one application by link, or by company + role when link is missing.",
-)
-def upsert_application(
-    payload: JobApplicationUpsert,
-    db: Session = Depends(get_db),
-    _: None = Depends(require_write_access),
-) -> JobApplicationOut:
-    payload_data = payload.model_dump()
-    today = _today_iso()
-
-    if not payload_data.get("last_seen_at"):
-        payload_data["last_seen_at"] = today
-    if not payload_data.get("listing_fingerprint"):
-        payload_data["listing_fingerprint"] = _listing_fingerprint(
-            [
-                payload_data.get("company", ""),
-                payload_data.get("role", ""),
-                payload_data.get("link", ""),
-                payload_data.get("source", ""),
-                payload_data.get("fit", ""),
-                str(payload_data.get("fit_score", "")),
-                payload_data.get("notes", ""),
-            ]
-        )
-
-    record = find_existing_application(db, company=payload.company, role=payload.role, link=payload.link)
-
-    if record is None:
-        if not payload_data.get("first_seen_at"):
-            payload_data["first_seen_at"] = today
-        record = JobApplication(**payload_data)
-        db.add(record)
-    else:
-        previous_fingerprint = (record.listing_fingerprint or "").strip()
-        incoming_fingerprint = (payload_data.get("listing_fingerprint") or "").strip()
-
-        payload_data["first_seen_at"] = record.first_seen_at or payload_data.get("first_seen_at") or today
-
-        if previous_fingerprint and incoming_fingerprint and previous_fingerprint != incoming_fingerprint:
-            payload_data["change_note"] = f"Updated on {today}: listing details changed"
-        elif not payload_data.get("change_note"):
-            payload_data["change_note"] = record.change_note or ""
-
-        for field, value in payload_data.items():
-            setattr(record, field, value)
-
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        record = find_existing_application(db, company=payload.company, role=payload.role, link=payload.link)
-        if record is None:
-            raise HTTPException(status_code=409, detail="Conflict while upserting application")
-
-        previous_fingerprint = (record.listing_fingerprint or "").strip()
-        incoming_fingerprint = (payload_data.get("listing_fingerprint") or "").strip()
-        if previous_fingerprint and incoming_fingerprint and previous_fingerprint != incoming_fingerprint:
-            payload_data["change_note"] = f"Updated on {today}: listing details changed"
-
-        for field, value in payload_data.items():
-            setattr(record, field, value)
-        try:
-            db.commit()
-        except Exception as exc:
-            db.rollback()
-            raise HTTPException(status_code=500, detail="Failed to update existing application") from exc
-
-    db.refresh(record)
-    return record
-
-
-@app.patch(
-    "/applications/{application_id}",
-    response_model=JobApplicationOut,
-    tags=["applications"],
-    summary="Patch editable fields on one application",
-)
-def patch_application(
-    application_id: int,
-    payload: JobApplicationUpdate,
-    db: Session = Depends(get_db),
-    _: None = Depends(require_write_access),
-) -> JobApplicationOut:
-    record = db.query(JobApplication).filter(JobApplication.id == application_id).first()
-    if record is None:
-        raise HTTPException(status_code=404, detail="Application not found")
-
-    updates = payload.model_dump(exclude_unset=True)
-    for field, value in updates.items():
-        setattr(record, field, value)
-
-    db.commit()
-    db.refresh(record)
-    return record
 
 
 def _resolve_workspace_file_path(raw_path: str) -> Path:
