@@ -35,7 +35,7 @@ jobs:
         run: pytest -q
 
   frontend:
-    name: Frontend Build
+    name: Frontend Checks
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -50,7 +50,10 @@ jobs:
           node-version: "20"
 
       - name: Install frontend dependencies
-        run: npm install
+        run: npm ci
+
+      - name: Run frontend tests
+        run: npm test
 
       - name: Build frontend
         run: npm run build
