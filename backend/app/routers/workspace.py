@@ -8,6 +8,14 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..dependencies import get_db, require_write_access
 from ..models import JobApplication
+from ..pathing import (
+    applications_root,
+    is_within_path,
+    resolve_from_applications_root,
+    resolve_from_workspace_root,
+    safe_relative_path,
+    workspace_root,
+)
 from ..schemas import (
     GenerateDocumentsRequest,
     GenerateDocumentsResult,
@@ -18,56 +26,12 @@ from ..schemas import (
 router = APIRouter(tags=["workspace"])
 
 
-def project_root() -> Path:
-    return Path(__file__).resolve().parents[3]
-
-
-def workspace_root() -> Path:
-    return project_root().parent
-
-
-def resolve_from_workspace_root(raw_path: str) -> Path:
-    path = Path(raw_path)
-    if path.is_absolute():
-        return path
-    return (workspace_root() / path).resolve()
-
-
-def applications_root() -> Path:
-    return resolve_from_workspace_root(settings.applications_root)
-
-
-def resolve_from_applications_root(raw_path: str) -> Path:
-    path = Path(raw_path)
-    if path.is_absolute():
-        return path
-
-    normalized = raw_path.strip().replace("\\", "/")
-    root_norm = settings.applications_root.strip().replace("\\", "/").strip("/")
-    if root_norm and (normalized == root_norm or normalized.startswith(root_norm + "/")):
-        return resolve_from_workspace_root(raw_path)
-
-    return (applications_root() / path).resolve()
-
-
 def templates_root() -> Path:
     return resolve_from_applications_root(settings.vacancies_template_dir)
 
 
 def base_cv_template_path() -> Path:
     return resolve_from_applications_root(settings.base_cv_template_path)
-
-
-def _is_within_path(path: Path, root: Path) -> bool:
-    try:
-        path.resolve().relative_to(root.resolve())
-        return True
-    except ValueError:
-        return False
-
-
-def _safe_relative_path(path: Path, root: Path) -> str:
-    return path.resolve().relative_to(root.resolve()).as_posix()
 
 
 def _slugify(value: str) -> str:
@@ -119,7 +83,7 @@ def _render_vacancy_notes(template_text: str, record: JobApplication) -> str:
 def _resolve_workspace_file_path(raw_path: str) -> Path:
     path = resolve_from_workspace_root(raw_path)
     root = applications_root()
-    if not _is_within_path(path, root):
+    if not is_within_path(path, root):
         raise HTTPException(status_code=400, detail="Only files under applications/ are allowed")
     if path.suffix.lower() not in {".md", ".tex", ".txt", ".csv"}:
         raise HTTPException(status_code=400, detail="Unsupported file extension")
@@ -190,16 +154,16 @@ def generate_documents(
     cv_path.write_text(cv_text, encoding="utf-8")
 
     workspace = workspace_root()
-    record.resume_ref = _safe_relative_path(cv_path, workspace)
-    record.cover_letter_ref = _safe_relative_path(cover_letter_path, workspace)
+    record.resume_ref = safe_relative_path(cv_path, workspace)
+    record.cover_letter_ref = safe_relative_path(cover_letter_path, workspace)
     db.commit()
 
     return GenerateDocumentsResult(
-        vacancy_dir=_safe_relative_path(target_dir, workspace),
-        vacancy_path=_safe_relative_path(vacancy_path, workspace),
-        cv_path=_safe_relative_path(cv_path, workspace),
-        cover_letter_path=_safe_relative_path(cover_letter_path, workspace),
-        notes_path=_safe_relative_path(notes_path, workspace),
+        vacancy_dir=safe_relative_path(target_dir, workspace),
+        vacancy_path=safe_relative_path(vacancy_path, workspace),
+        cv_path=safe_relative_path(cv_path, workspace),
+        cover_letter_path=safe_relative_path(cover_letter_path, workspace),
+        notes_path=safe_relative_path(notes_path, workspace),
     )
 
 
@@ -216,7 +180,7 @@ def read_workspace_file(
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     return WorkspaceFileReadResult(
-        path=_safe_relative_path(target, workspace_root()), content=target.read_text(encoding="utf-8")
+        path=safe_relative_path(target, workspace_root()), content=target.read_text(encoding="utf-8")
     )
 
 
@@ -232,4 +196,4 @@ def write_workspace_file(
     target = _resolve_workspace_file_path(payload.path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(payload.content, encoding="utf-8")
-    return WorkspaceFileReadResult(path=_safe_relative_path(target, workspace_root()), content=payload.content)
+    return WorkspaceFileReadResult(path=safe_relative_path(target, workspace_root()), content=payload.content)

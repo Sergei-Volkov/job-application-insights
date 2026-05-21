@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 import subprocess
 import sys
 
@@ -7,31 +6,10 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ..config import settings
 from ..dependencies import require_write_access
+from ..pathing import resolve_from_project_root, resolve_from_workspace_root
 from ..schemas import DiscoveryRunRequest, DiscoveryRunResult
 
 router = APIRouter(tags=["imports"])
-
-
-def project_root() -> Path:
-    return Path(__file__).resolve().parents[3]
-
-
-def workspace_root() -> Path:
-    return project_root().parent
-
-
-def resolve_from_project_root(raw_path: str) -> Path:
-    path = Path(raw_path)
-    if path.is_absolute():
-        return path
-    return (project_root() / path).resolve()
-
-
-def resolve_from_workspace_root(raw_path: str) -> Path:
-    path = Path(raw_path)
-    if path.is_absolute():
-        return path
-    return (workspace_root() / path).resolve()
 
 
 def _summarize_process_output(text: str, max_chars: int) -> str:
