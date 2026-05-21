@@ -2,20 +2,25 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import re
 import ssl
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from urllib.parse import quote_plus
+from typing import Callable
+from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qsl, quote_plus, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
-WORKSPACE_ROOT = Path(__file__).resolve().parents[1]  # app/
-OUTPUT_DIR = WORKSPACE_ROOT / "data"
+APP_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = APP_ROOT.parent if (APP_ROOT.parent / "applications").exists() else APP_ROOT
+OUTPUT_DIR = REPO_ROOT / "applications" / "tracker"
 TRACKER_PATH = OUTPUT_DIR / "job_applications.csv"
 NOTES_PATH = OUTPUT_DIR / "application_notes_latest.md"
 CHECKLIST_PATH = OUTPUT_DIR / "selected_jobs.md"
@@ -33,6 +38,13 @@ REMOTEOK_API = "https://remoteok.com/api"
 REMOTIVE_API = "https://remotive.com/api/remote-jobs?search={query}"
 ARBEITNOW_API = "https://www.arbeitnow.com/api/job-board-api"
 SEARCH_TERMS = ["data engineer", "analytics engineer", "data platform", "airflow", "etl"]
+PROFILE_SEARCH_TERMS = {
+    "de": ["data engineer", "analytics engineer", "data platform", "airflow", "etl"],
+    "swe": ["software engineer", "backend engineer", "platform engineer", "infrastructure engineer"],
+    "other": ["data engineer", "software engineer", "platform engineer", "etl", "backend engineer"],
+}
+
+SOURCE_OPTIONS = ["wwr", "working_nomads", "remoteok", "remotive", "arbeitnow", "jobicy"]
 
 KEYWORD_WEIGHTS = {
     "python": 3,
@@ -98,6 +110,7 @@ SKILL_PATTERNS = {
 }
 
 OWNED_SKILLS = set(SKILL_PATTERNS)
+ACTIVE_PROFILE = "de"
 
 REJECT_PATTERNS = [
     "data scientist",
@@ -136,6 +149,7 @@ TRACKER_FIELDS = [
 ]
 
 DEFAULT_API_BASE_URL = os.environ.get("JOB_SEARCH_API_BASE_URL", "http://127.0.0.1:8000")
+DEFAULT_API_WRITE_KEY = os.environ.get("JOB_SEARCH_WRITE_API_KEY", "")
 
 
 @dataclass
@@ -153,6 +167,57 @@ class JobMatch:
     fit_notes: str
 
 
+@dataclass(frozen=True)
+class SourceAdapter:
+    key: str
+    label: str
+    collector: Callable[[], list[JobMatch]]
+
+
+@dataclass
+class SourceRunReport:
+    key: str
+    label: str
+    collected: int
+    error: str = ""
+
+
+@dataclass
+class CollectionReport:
+    sources: list[SourceRunReport]
+    raw_total: int
+    filtered_age: int
+    filtered_score: int
+    filtered_stretch: int
+    dedup_collisions: int
+    deduped_total: int
+
+
+@dataclass
+class ApiUpsertFailure:
+    company: str
+    title: str
+    source: str
+    status_code: int | None
+    error_type: str
+    message: str
+
+
+TRANSIENT_HTTP_CODES = {408, 425, 429, 500, 502, 503, 504}
+
+
+def classify_upsert_exception(exc: Exception) -> tuple[int | None, str, bool]:
+    if isinstance(exc, HTTPError):
+        status_code = int(getattr(exc, "code", 0) or 0)
+        transient = status_code in TRANSIENT_HTTP_CODES
+        return status_code, "HTTPError", transient
+    if isinstance(exc, URLError):
+        return None, "URLError", True
+    if isinstance(exc, TimeoutError):
+        return None, "TimeoutError", True
+    return None, type(exc).__name__, False
+
+
 def fetch_text(url: str, timeout: int = 25) -> str:
     request = Request(
         url,
@@ -166,15 +231,23 @@ def fetch_text(url: str, timeout: int = 25) -> str:
         return response.read().decode("utf-8", errors="ignore")
 
 
-def post_json(url: str, payload: dict[str, object], timeout: int = 25) -> dict[str, object]:
+def post_json(
+    url: str,
+    payload: dict[str, object],
+    timeout: int = 25,
+    extra_headers: dict[str, str] | None = None,
+) -> dict[str, object]:
+    headers: dict[str, str] = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    if extra_headers:
+        headers.update(extra_headers)
     request = Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        },
+        headers=headers,
         method="POST",
     )
     context = ssl.create_default_context()
@@ -184,6 +257,24 @@ def post_json(url: str, payload: dict[str, object], timeout: int = 25) -> dict[s
 
 def normalize(text: object | None) -> str:
     return re.sub(r"\s+", " ", "" if text is None else str(text)).strip()
+
+
+def normalize_url(url: str) -> str:
+    raw = normalize(url)
+    if not raw:
+        return ""
+    try:
+        parts = urlsplit(raw)
+        query_items = [
+            (k, v)
+            for (k, v) in parse_qsl(parts.query, keep_blank_values=True)
+            if not k.lower().startswith("utm_")
+        ]
+        normalized_query = urlencode(query_items, doseq=True)
+        normalized_path = parts.path.rstrip("/") or "/"
+        return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), normalized_path, normalized_query, ""))
+    except Exception:
+        return raw.rstrip("/")
 
 
 def strip_latex(text: str) -> str:
@@ -211,13 +302,45 @@ def extract_owned_skills_from_cv(cv_path: Path) -> set[str]:
     return owned
 
 
-def infer_search_terms(owned_skills: set[str]) -> list[str]:
-    terms = ["data engineer", "analytics engineer", "data platform"]
-    if "airflow" in owned_skills:
-        terms.append("airflow")
-    if "etl" in owned_skills or "elt" in owned_skills:
-        terms.append("etl")
+def infer_search_terms_for_profile(owned_skills: set[str], profile: str) -> list[str]:
+    terms = PROFILE_SEARCH_TERMS.get(profile, PROFILE_SEARCH_TERMS["de"]).copy()
+    if profile in {"de", "other"}:
+        if "airflow" in owned_skills and "airflow" not in terms:
+            terms.append("airflow")
+        if ("etl" in owned_skills or "elt" in owned_skills) and "etl" not in terms:
+            terms.append("etl")
     return terms
+
+
+def profile_title_signals(profile: str) -> list[str]:
+    if profile == "swe":
+        return ["software engineer", "backend engineer", "platform engineer", "infrastructure", "devops"]
+    if profile == "other":
+        return [
+            "data engineer",
+            "analytics engineer",
+            "software engineer",
+            "backend engineer",
+            "platform engineer",
+            "devops",
+        ]
+    return [
+        "data engineer",
+        "analytics engineer",
+        "data platform",
+        "data ops",
+        "data devops",
+        "etl developer",
+        "bi engineer",
+    ]
+
+
+def profile_reject_patterns(profile: str) -> list[str]:
+    if profile == "swe":
+        return ["data scientist", "data annotator", "marketing analytics", "manager", "director", "volunteer"]
+    if profile == "other":
+        return ["manager", "director", "volunteer", "talent community"]
+    return REJECT_PATTERNS
 
 
 def split_company_and_title(raw_title: str, fallback_company: str = "Unknown") -> tuple[str, str]:
@@ -248,23 +371,18 @@ def split_company_and_title(raw_title: str, fallback_company: str = "Unknown") -
 def is_relevant(title: str, details: str) -> bool:
     title_lower = title.lower()
     details_lower = details.lower()
-    if any(bad in title_lower for bad in REJECT_PATTERNS):
+    if any(bad in title_lower for bad in profile_reject_patterns(ACTIVE_PROFILE)):
         return False
 
-    strong_title_signals = [
-        "data engineer",
-        "analytics engineer",
-        "data platform",
-        "data ops",
-        "data devops",
-        "etl developer",
-        "bi engineer",
-    ]
+    strong_title_signals = profile_title_signals(ACTIVE_PROFILE)
     if any(signal in title_lower for signal in strong_title_signals):
         return True
 
     has_data_word = re.search(r"\bdata\b", title_lower) is not None
-    has_role_word = re.search(r"\b(engineer|platform|warehouse|analytics|etl|elt|devops)\b", title_lower) is not None
+    has_role_word = (
+        re.search(r"\b(engineer|platform|warehouse|analytics|etl|elt|devops|backend|software)\b", title_lower)
+        is not None
+    )
     if has_data_word and has_role_word:
         return True
 
@@ -295,6 +413,10 @@ def score_match(title: str, details: str) -> int:
             score += weight if keyword in OWNED_SKILLS else 1
     if "data engineer" in title_lower:
         score += 6
+    if ACTIVE_PROFILE == "swe" and ("software engineer" in title_lower or "backend engineer" in title_lower):
+        score += 5
+    if ACTIVE_PROFILE == "other" and ("software engineer" in title_lower or "backend engineer" in title_lower):
+        score += 3
     if "analytics engineer" in title_lower:
         score += 5
     if "data platform" in title_lower or "data ops" in title_lower or "data devops" in title_lower:
@@ -452,11 +574,13 @@ def build_job_match(
 
 def collect_wwr() -> list[JobMatch]:
     matches: list[JobMatch] = []
+    feed_errors: list[str] = []
     for feed_url in WWR_FEEDS:
         try:
             xml_text = fetch_text(feed_url)
             root = ET.fromstring(xml_text)
-        except Exception:
+        except Exception as exc:
+            feed_errors.append(f"{feed_url}: {exc}")
             continue
 
         for item in root.findall("./channel/item"):
@@ -482,15 +606,14 @@ def collect_wwr() -> list[JobMatch]:
                     details=details,
                 )
             )
+    if not matches and feed_errors:
+        raise RuntimeError("; ".join(feed_errors[:3]))
     return matches
 
 
 def collect_working_nomads() -> list[JobMatch]:
     matches: list[JobMatch] = []
-    try:
-        data = json.loads(fetch_text(WORKING_NOMADS_API))
-    except Exception:
-        return matches
+    data = json.loads(fetch_text(WORKING_NOMADS_API))
 
     for item in data:
         title = normalize(item.get("title"))
@@ -517,10 +640,7 @@ def collect_working_nomads() -> list[JobMatch]:
 
 def collect_remoteok() -> list[JobMatch]:
     matches: list[JobMatch] = []
-    try:
-        data = json.loads(fetch_text(REMOTEOK_API))
-    except Exception:
-        return matches
+    data = json.loads(fetch_text(REMOTEOK_API))
 
     for item in data:
         title = normalize(item.get("position"))
@@ -547,10 +667,12 @@ def collect_remoteok() -> list[JobMatch]:
 def collect_remotive() -> list[JobMatch]:
     matches: list[JobMatch] = []
     seen: set[tuple[str, str]] = set()
+    term_errors: list[str] = []
     for term in SEARCH_TERMS:
         try:
             data = json.loads(fetch_text(REMOTIVE_API.format(query=quote_plus(term))))
-        except Exception:
+        except Exception as exc:
+            term_errors.append(f"{term}: {exc}")
             continue
 
         for item in data.get("jobs", []):
@@ -574,15 +696,14 @@ def collect_remotive() -> list[JobMatch]:
                     details=details,
                 )
             )
+    if not matches and term_errors:
+        raise RuntimeError("; ".join(term_errors[:3]))
     return matches
 
 
 def collect_arbeitnow() -> list[JobMatch]:
     matches: list[JobMatch] = []
-    try:
-        data = json.loads(fetch_text(ARBEITNOW_API))
-    except Exception:
-        return matches
+    data = json.loads(fetch_text(ARBEITNOW_API))
 
     for item in data.get("data", []):
         title = normalize(item.get("title"))
@@ -609,11 +730,8 @@ def collect_arbeitnow() -> list[JobMatch]:
 
 def collect_jobicy() -> list[JobMatch]:
     matches: list[JobMatch] = []
-    try:
-        xml_text = fetch_text(JOBICY_FEED)
-        root = ET.fromstring(xml_text)
-    except Exception:
-        return matches
+    xml_text = fetch_text(JOBICY_FEED)
+    root = ET.fromstring(xml_text)
 
     for item in root.findall("./channel/item"):
         raw_title = normalize(item.findtext("title"))
@@ -637,39 +755,94 @@ def collect_jobicy() -> list[JobMatch]:
     return matches
 
 
-def collect_matches(limit: int, min_score: int, max_age_days: int, include_stretch: bool) -> list[JobMatch]:
-    combined = (
-        collect_wwr()
-        + collect_working_nomads()
-        + collect_remoteok()
-        + collect_remotive()
-        + collect_arbeitnow()
-        + collect_jobicy()
-    )
-    deduped: dict[tuple[str, str], JobMatch] = {}
+def source_adapters() -> dict[str, SourceAdapter]:
+    return {
+        "wwr": SourceAdapter("wwr", "We Work Remotely", collect_wwr),
+        "working_nomads": SourceAdapter("working_nomads", "Working Nomads", collect_working_nomads),
+        "remoteok": SourceAdapter("remoteok", "Remote OK", collect_remoteok),
+        "remotive": SourceAdapter("remotive", "Remotive", collect_remotive),
+        "arbeitnow": SourceAdapter("arbeitnow", "Arbeitnow", collect_arbeitnow),
+        "jobicy": SourceAdapter("jobicy", "Jobicy", collect_jobicy),
+    }
+
+
+def collect_from_sources(selected_sources: list[str]) -> tuple[list[JobMatch], list[SourceRunReport]]:
+    adapters = source_adapters()
+    combined: list[JobMatch] = []
+    reports: list[SourceRunReport] = []
+
+    for key in selected_sources:
+        adapter = adapters.get(key)
+        if adapter is None:
+            reports.append(SourceRunReport(key=key, label=key, collected=0, error="Unknown source key"))
+            continue
+
+        try:
+            items = adapter.collector()
+            combined.extend(items)
+            reports.append(SourceRunReport(key=key, label=adapter.label, collected=len(items)))
+        except Exception as exc:
+            reports.append(SourceRunReport(key=key, label=adapter.label, collected=0, error=str(exc)))
+
+    return combined, reports
+
+
+def collect_matches(
+    limit: int,
+    min_score: int,
+    max_age_days: int,
+    include_stretch: bool,
+    sources: list[str] | None = None,
+) -> tuple[list[JobMatch], CollectionReport]:
+    requested_sources = [source for source in (sources or SOURCE_OPTIONS) if source in SOURCE_OPTIONS]
+    combined, source_reports = collect_from_sources(requested_sources)
+
+    deduped: dict[tuple[str, str, str], JobMatch] = {}
+    filtered_age = 0
+    filtered_score = 0
+    filtered_stretch = 0
+    dedup_collisions = 0
 
     for item in combined:
         age = days_old(item.freshness)
         if age is not None and age > max_age_days:
+            filtered_age += 1
             continue
         if item.score < min_score:
+            filtered_score += 1
             continue
         if not include_stretch and item.fit == "Stretch":
+            filtered_stretch += 1
             continue
 
-        key = (item.title.lower(), item.company.lower())
+        normalized_link = normalize_url(item.url)
+        url_or_context = normalized_link or normalize(item.remote_policy).lower() or "no-url"
+        key = (item.title.lower(), item.company.lower(), url_or_context)
         current = deduped.get(key)
-        if current is None or item.score > current.score:
+        if current is None:
+            deduped[key] = item
+            continue
+        dedup_collisions += 1
+        if item.score > current.score:
             deduped[key] = item
 
     matches = sorted(
         deduped.values(),
         key=lambda row: (-row.score, row.freshness, row.title.lower()),
     )
-    return matches[:limit]
+    report = CollectionReport(
+        sources=source_reports,
+        raw_total=len(combined),
+        filtered_age=filtered_age,
+        filtered_score=filtered_score,
+        filtered_stretch=filtered_stretch,
+        dedup_collisions=dedup_collisions,
+        deduped_total=len(deduped),
+    )
+    return matches[:limit], report
 
 
-def write_table(path: Path, title: str, matches: list[JobMatch]) -> Path:
+def write_table(path: Path, title: str, matches: list[JobMatch], report: CollectionReport | None = None) -> Path:
     with path.open("w", encoding="utf-8") as fh:
         fh.write(f"# {title}\n\n")
         fh.write(f"Generated: {datetime.now().isoformat(timespec='minutes')}\n\n")
@@ -683,10 +856,30 @@ def write_table(path: Path, title: str, matches: list[JobMatch]) -> Path:
             fh.write(
                 f"| [{safe_title}]({item.url}) | {safe_company} | {item.source} | {item.remote_policy} | {item.freshness} | {item.fit} | {item.score} | {safe_missing} | {safe_note} |\n"
             )
+
+        if report is not None:
+            fh.write("\n## Source Health\n\n")
+            fh.write("| Source | Key | Collected | Error |\n")
+            fh.write("|---|---|---:|---|\n")
+            for source_report in report.sources:
+                safe_error = (source_report.error or "—").replace("|", "/")
+                fh.write(
+                    f"| {source_report.label} | {source_report.key} | {source_report.collected} | {safe_error} |\n"
+                )
+
+            fh.write("\n## Filter Summary\n\n")
+            fh.write(f"- Raw collected listings: {report.raw_total}\n")
+            fh.write(f"- Filtered by age: {report.filtered_age}\n")
+            fh.write(f"- Filtered by score: {report.filtered_score}\n")
+            fh.write(f"- Filtered stretch roles: {report.filtered_stretch}\n")
+            fh.write(f"- Dedup collisions: {report.dedup_collisions}\n")
+            fh.write(f"- Unique listings after dedup: {report.deduped_total}\n")
     return path
 
 
-def write_outputs(strict_matches: list[JobMatch], broad_matches: list[JobMatch]) -> tuple[Path, Path, Path]:
+def write_outputs(
+    strict_matches: list[JobMatch], broad_matches: list[JobMatch], report: CollectionReport | None = None
+) -> tuple[Path, Path, Path]:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M")
     csv_path = OUTPUT_DIR / f"job_matches_{stamp}.csv"
@@ -714,8 +907,8 @@ def write_outputs(strict_matches: list[JobMatch], broad_matches: list[JobMatch])
         for item in broad_matches:
             writer.writerow(item.__dict__)
 
-    write_table(strict_md_path, "Latest Job Matches - Strict Shortlist", strict_matches)
-    write_table(broad_md_path, "Broad Job Discovery List", broad_matches)
+    write_table(strict_md_path, "Latest Job Matches - Strict Shortlist", strict_matches, report)
+    write_table(broad_md_path, "Broad Job Discovery List", broad_matches, report)
     return csv_path, strict_md_path, broad_md_path
 
 
@@ -731,7 +924,7 @@ def write_application_notes(matches: list[JobMatch]) -> Path:
             fh.write(f"- Link: {item.url}\n")
             fh.write(f"- Why it fits: {item.fit_notes}\n")
             fh.write(f"- Missing skills to watch: {item.missing_skills or 'None flagged'}\n")
-            fh.write("- Tailor your CV by highlighting:\n")
+            fh.write("- CV tailoring focus:\n")
             for point in tailoring_points(item):
                 fh.write(f"  - {point}\n")
             fh.write(f"- Recommended next step: {next_step_for_fit(item.fit)}\n\n")
@@ -785,11 +978,20 @@ def write_selected_jobs_checklist(matches: list[JobMatch]) -> Path:
     return CHECKLIST_PATH
 
 
-def sync_application_api(matches: list[JobMatch], api_base_url: str) -> tuple[int, int]:
+def sync_application_api(
+    matches: list[JobMatch],
+    api_base_url: str,
+    api_key: str = "",
+    max_attempts: int = 3,
+    base_backoff_seconds: float = 0.5,
+) -> tuple[int, list[ApiUpsertFailure]]:
     today = datetime.now().strftime("%Y-%m-%d")
     created_or_updated = 0
-    failed = 0
+    failed: list[ApiUpsertFailure] = []
     endpoint = api_base_url.rstrip("/") + "/applications/upsert"
+    extra_headers: dict[str, str] = {}
+    if api_key:
+        extra_headers["X-API-Key"] = api_key
 
     for item in matches:
         payload = {
@@ -809,20 +1011,50 @@ def sync_application_api(matches: list[JobMatch], api_base_url: str) -> tuple[in
             "follow_up_date": "",
             "resume_ref": "",
             "cover_letter_ref": "",
+            "match_profile": ACTIVE_PROFILE,
+            "first_seen_at": today,
+            "last_seen_at": today,
+            "listing_fingerprint": hashlib.sha256(
+                f"{item.company}|{item.title}|{item.url}|{item.source}|{item.remote_policy}|{item.freshness}|{item.fit_notes}".encode(
+                    "utf-8"
+                )
+            ).hexdigest(),
+            "change_note": "",
             "notes": item.fit_notes,
         }
-        try:
-            post_json(endpoint, payload)
-            created_or_updated += 1
-        except Exception:
-            failed += 1
+        attempt = 0
+        while attempt < max_attempts:
+            try:
+                post_json(endpoint, payload, extra_headers=extra_headers)
+                created_or_updated += 1
+                break
+            except Exception as exc:
+                status_code, error_type, is_transient = classify_upsert_exception(exc)
+                attempt += 1
+
+                if is_transient and attempt < max_attempts:
+                    sleep_seconds = base_backoff_seconds * (2 ** (attempt - 1))
+                    time.sleep(sleep_seconds)
+                    continue
+
+                failed.append(
+                    ApiUpsertFailure(
+                        company=item.company,
+                        title=item.title,
+                        source=item.source,
+                        status_code=status_code,
+                        error_type=error_type,
+                        message=str(exc),
+                    )
+                )
+                break
 
     return created_or_updated, failed
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Fetch remote data-engineering jobs that fit your profile.")
-    parser.add_argument("--cv-path", required=True, help="Path to your CV file used to infer your actual skills.")
+    parser = argparse.ArgumentParser(description="Fetch remote data-engineering jobs aligned with the selected profile.")
+    parser.add_argument("--cv-path", required=True, help="Path to CV file used to infer available skills.")
     parser.add_argument("--limit", type=int, default=40, help="Maximum number of rows to keep in the strict shortlist.")
     parser.add_argument("--min-score", type=int, default=7, help="Minimum fit score for the strict shortlist.")
     parser.add_argument(
@@ -839,7 +1071,26 @@ def main() -> int:
     parser.add_argument(
         "--output-dir",
         default=None,
-        help="Directory to write output files (md, csv). Defaults to the data/ folder inside the app root.",
+        help="Directory to write output files (md, csv). Defaults to applications/tracker.",
+    )
+    parser.add_argument(
+        "--profile",
+        default="de",
+        choices=["de", "swe", "other"],
+        help="Search profile: de (data engineering), swe (software engineering), other (broader adjacent).",
+    )
+    parser.add_argument(
+        "--sources",
+        default=",".join(SOURCE_OPTIONS),
+        help=(
+            "Comma-separated source keys to query. "
+            "Options: wwr, working_nomads, remoteok, remotive, arbeitnow, jobicy"
+        ),
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print source-by-source collection diagnostics and filtering summary.",
     )
     args = parser.parse_args()
 
@@ -853,19 +1104,36 @@ def main() -> int:
 
     cv_path = Path(args.cv_path)
     if not cv_path.is_absolute():
-        cv_path = (WORKSPACE_ROOT / cv_path).resolve()
+        cv_path = (REPO_ROOT / cv_path).resolve()
     if not cv_path.exists():
         print(f"CV file not found: {cv_path}")
         return 2
 
-    global OWNED_SKILLS, SEARCH_TERMS
+    global OWNED_SKILLS, SEARCH_TERMS, ACTIVE_PROFILE
     OWNED_SKILLS = extract_owned_skills_from_cv(cv_path)
     if not OWNED_SKILLS:
         print(f"No recognizable skills found in CV: {cv_path}")
         return 2
-    SEARCH_TERMS = infer_search_terms(OWNED_SKILLS)
+    ACTIVE_PROFILE = args.profile
+    SEARCH_TERMS = infer_search_terms_for_profile(OWNED_SKILLS, ACTIVE_PROFILE)
 
-    broad_matches = collect_matches(limit=max(args.limit * 3, 120), min_score=1, max_age_days=120, include_stretch=True)
+    if not DEFAULT_API_WRITE_KEY:
+        print("Warning: JOB_SEARCH_WRITE_API_KEY is not set; API upserts will likely fail with 401 Unauthorized.")
+    elif len(DEFAULT_API_WRITE_KEY.strip()) < 8:
+        print("Warning: JOB_SEARCH_WRITE_API_KEY looks unusually short; verify the value if API upserts fail.")
+
+    requested_sources = [part.strip().lower() for part in str(args.sources).split(",") if part.strip()]
+    requested_sources = [source for source in requested_sources if source in SOURCE_OPTIONS]
+    if not requested_sources:
+        requested_sources = SOURCE_OPTIONS.copy()
+
+    broad_matches, collection_report = collect_matches(
+        limit=max(args.limit * 3, 120),
+        min_score=1,
+        max_age_days=120,
+        include_stretch=True,
+        sources=requested_sources,
+    )
     strict_matches = [
         item
         for item in broad_matches
@@ -873,13 +1141,33 @@ def main() -> int:
     ][: args.limit]
 
     if not broad_matches:
+        source_errors = [report for report in collection_report.sources if report.error]
+        if source_errors:
+            print("Source errors:")
+            for report in source_errors:
+                print(f"- {report.label} ({report.key}): {report.error}")
         print("No matches found this run.")
         return 1
 
-    csv_path, md_path, broad_md_path = write_outputs(strict_matches, broad_matches)
+    csv_path, md_path, broad_md_path = write_outputs(strict_matches, broad_matches, collection_report)
     notes_path = write_application_notes(strict_matches)
-    synced_count, failed_count = sync_application_api(strict_matches, args.api_base_url)
+    synced_count, failed_rows = sync_application_api(strict_matches, args.api_base_url, DEFAULT_API_WRITE_KEY)
     checklist_path = write_selected_jobs_checklist(strict_matches)
+
+    source_errors = [report for report in collection_report.sources if report.error]
+    if args.verbose or source_errors:
+        print("Source diagnostics:")
+        for report in collection_report.sources:
+            status = f"error={report.error}" if report.error else f"collected={report.collected}"
+            print(f"- {report.label} ({report.key}): {status}")
+    if args.verbose:
+        print("Filter summary:")
+        print(f"- raw_total={collection_report.raw_total}")
+        print(f"- filtered_age={collection_report.filtered_age}")
+        print(f"- filtered_score={collection_report.filtered_score}")
+        print(f"- filtered_stretch={collection_report.filtered_stretch}")
+        print(f"- dedup_collisions={collection_report.dedup_collisions}")
+        print(f"- deduped_total={collection_report.deduped_total}")
 
     print(f"Saved {len(broad_matches)} total matches to: {csv_path}")
     print(f"Updated strict shortlist: {md_path}")
@@ -887,8 +1175,29 @@ def main() -> int:
     print(f"Updated notes: {notes_path}")
     print(f"Updated checklist: {checklist_path}")
     print(f"API upserts sent: {synced_count}")
-    if failed_count:
-        print(f"API upserts failed: {failed_count}")
+    if failed_rows:
+        print(f"API upserts failed: {len(failed_rows)}")
+        status_counts: dict[str, int] = {}
+        for row in failed_rows:
+            status_label = str(row.status_code) if row.status_code is not None else row.error_type
+            status_counts[status_label] = status_counts.get(status_label, 0) + 1
+
+        if args.verbose:
+            print("API upsert failures by status/error:")
+            for status_label in sorted(status_counts):
+                print(f"- {status_label}: {status_counts[status_label]}")
+
+        if args.verbose:
+            print("API upsert failure samples:")
+            for row in failed_rows[:5]:
+                status_label = str(row.status_code) if row.status_code is not None else row.error_type
+                print(f"- {row.company} | {row.title} | {row.source} | {status_label} | {row.message}")
+
+        unauthorized_count = status_counts.get("401", 0)
+        if unauthorized_count:
+            print(
+                "Warning: Received 401 Unauthorized during API upserts. Check JOB_SEARCH_WRITE_API_KEY and backend key settings."
+            )
     return 0
 
 

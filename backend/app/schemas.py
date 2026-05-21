@@ -19,6 +19,11 @@ class JobApplicationOut(BaseModel):
     follow_up_date: str
     resume_ref: str
     cover_letter_ref: str
+    match_profile: str
+    first_seen_at: str
+    last_seen_at: str
+    listing_fingerprint: str
+    change_note: str
     notes: str
 
     model_config = {"from_attributes": True}
@@ -32,6 +37,11 @@ class JobApplicationUpdate(BaseModel):
     follow_up_date: str | None = None
     resume_ref: str | None = None
     cover_letter_ref: str | None = None
+    match_profile: str | None = None
+    first_seen_at: str | None = None
+    last_seen_at: str | None = None
+    listing_fingerprint: str | None = None
+    change_note: str | None = None
     notes: str | None = None
 
 
@@ -52,6 +62,11 @@ class JobApplicationUpsert(BaseModel):
     follow_up_date: str = ""
     resume_ref: str = ""
     cover_letter_ref: str = ""
+    match_profile: str = ""
+    first_seen_at: str = ""
+    last_seen_at: str = ""
+    listing_fingerprint: str = ""
+    change_note: str = ""
     notes: str = ""
 
 
@@ -89,6 +104,11 @@ class DiscoveryRunRequest(BaseModel):
     min_score: int = 7
     max_age_days: int = 45
     include_stretch: bool = False
+    profile: str = "de"
+    cv_path: str | None = None
+    api_base_url: str | None = None
+    verbose: bool = False
+    sources: list[str] | None = None
 
 
 class DiscoveryRunResult(BaseModel):
@@ -96,3 +116,27 @@ class DiscoveryRunResult(BaseModel):
     command: list[str]
     stdout: str
     stderr: str
+
+
+class GenerateDocumentsRequest(BaseModel):
+    overwrite: bool = False
+    author_name: str | None = None
+    your_name: str | None = None
+
+
+class GenerateDocumentsResult(BaseModel):
+    vacancy_dir: str
+    vacancy_path: str
+    cv_path: str
+    cover_letter_path: str
+    notes_path: str
+
+
+class WorkspaceFileReadResult(BaseModel):
+    path: str
+    content: str
+
+
+class WorkspaceFileWriteRequest(BaseModel):
+    path: str
+    content: str

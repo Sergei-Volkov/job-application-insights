@@ -1,44 +1,43 @@
-from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import ConfigDict
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    # Database — override via DATABASE_URL env var.
-    # Use absolute path format for non-SQLite, e.g.:
-    #   postgresql+psycopg2://user:pass@host/db
+    # Database connection string.
     database_url: str = "sqlite:///./app.db"
 
-    # Path to the tracker CSV that seeds the DB on first startup.
-    csv_path: str = "data/job_applications_sample.csv"
+    # CSV used by /sync-from-csv.
+    csv_path: str = "applications/tracker/job_applications.csv"
 
-    # Comma-separated fallback skill list shown when notes contain no gap markers.
+    # Fallback skill list used when notes contain no gap markers.
     default_missing_skills: str = "Kubernetes,Redis,GraphQL,Cypress,Terraform,CI/CD"
 
-    # Comma-separated allowed CORS origins.
+    # Allowed CORS origins.
     cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
     cors_allow_credentials: bool = False
 
-    # Optional API key for write/execute endpoints.
-    # When empty, write endpoints remain open (convenient for local development).
+    # Optional API key for write and execute endpoints.
     write_api_key: str = ""
 
-    # Discovery integration: path to the existing finder script and CV file.
+    # Require X-API-Key for write and execute endpoints.
+    require_write_key: bool = True
+
+    # Default author for generated documents.
+    generated_document_author: str = ""
+
+    # Discovery script settings.
     discovery_script_path: str = "discovery/job_finder.py"
-    # CV path has no default — set DISCOVERY_CV_PATH in your .env or environment.
     discovery_cv_path: str = ""
     discovery_api_base_url: str = "http://127.0.0.1:8000"
     discovery_log_max_chars: int = 3000
+    discovery_default_profile: str = "de"
 
-    @field_validator("cors_origins", mode="before")
-    @classmethod
-    def _split_cors(cls, v: object) -> object:
-        # Allow passing origins as a comma-separated string via env var:
-        # CORS_ORIGINS="http://localhost:3000,https://myapp.example.com"
-        if isinstance(v, str):
-            return [origin.strip() for origin in v.split(",") if origin.strip()]
-        return v
+    # Workspace-relative paths used by document generation and file editing.
+    applications_root: str = "applications"
+    vacancies_template_dir: str = "applications/vacancies/_template"
+    base_cv_template_path: str = "applications/resumes/CV.tex"
 
-    model_config = SettingsConfigDict(
+    model_config = ConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",

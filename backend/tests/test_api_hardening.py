@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import shutil
 import sys
 from unittest.mock import patch
 
@@ -14,12 +15,26 @@ _TMP_DIR.mkdir(parents=True, exist_ok=True)
 _SEED_CSV = _TMP_DIR / "seed.csv"
 _CV_PATH = _TMP_DIR / "cv.tex"
 _DB_PATH = _TMP_DIR / "test.db"
+_APPLICATIONS_ROOT = _TMP_DIR / "applications"
+_TEMPLATE_DIR = _APPLICATIONS_ROOT / "vacancies" / "_template"
+_RESUMES_DIR = _APPLICATIONS_ROOT / "resumes"
 
 _SEED_CSV.write_text(
     "selected,date_found,date_applied,company,role,location,source,remote_type,fit,fit_score,link,status,next_step,follow_up_date,notes\n",
     encoding="utf-8",
 )
 _CV_PATH.write_text("Python SQL FastAPI", encoding="utf-8")
+_TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)
+_RESUMES_DIR.mkdir(parents=True, exist_ok=True)
+(_TEMPLATE_DIR / "cover_letter.md").write_text(
+    "Dear Hiring Team, [Role Title] at [Company].\n[Author Name]", encoding="utf-8"
+)
+(_TEMPLATE_DIR / "notes.md").write_text("# Tailoring Notes\n", encoding="utf-8")
+(_TEMPLATE_DIR / "vacancy.md").write_text(
+    "# Vacancy\n\n## Company\n- \n\n## Role\n- \n\n## Source URL\n- \n\n## Requirements (copied)\n- \n\n## Key signals to mirror in CV\n- \n\n## Potential gaps and response strategy\n- \n",
+    encoding="utf-8",
+)
+(_RESUMES_DIR / "CV.tex").write_text("% base cv\n", encoding="utf-8")
 
 if _DB_PATH.exists():
     _DB_PATH.unlink()
@@ -28,7 +43,11 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_DB_PATH.as_posix()}"
 os.environ["CSV_PATH"] = str(_SEED_CSV)
 os.environ["DISCOVERY_CV_PATH"] = str(_CV_PATH)
 os.environ["WRITE_API_KEY"] = "test-key"
+os.environ["REQUIRE_WRITE_KEY"] = "true"
 os.environ["DISCOVERY_LOG_MAX_CHARS"] = "80"
+os.environ["APPLICATIONS_ROOT"] = str(_APPLICATIONS_ROOT)
+os.environ["VACANCIES_TEMPLATE_DIR"] = str(_TEMPLATE_DIR)
+os.environ["BASE_CV_TEMPLATE_PATH"] = str(_RESUMES_DIR / "CV.tex")
 
 from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
@@ -76,6 +95,22 @@ def test_write_endpoints_require_api_key() -> None:
 
     ok = client.post("/applications/upsert", json=_base_payload(), headers=_auth_headers())
     assert ok.status_code == 200
+
+
+def test_create_application_rejects_duplicates() -> None:
+    _clear_db()
+
+    first = client.post(
+        "/applications", json=_base_payload(link="https://example.com/job/create-1"), headers=_auth_headers()
+    )
+    assert first.status_code == 201
+
+    duplicate = client.post(
+        "/applications",
+        json=_base_payload(link="https://example.com/job/create-1"),
+        headers=_auth_headers(),
+    )
+    assert duplicate.status_code == 409
 
 
 def test_status_filter_is_exact_match_case_insensitive() -> None:
@@ -139,3 +174,131 @@ def test_sync_from_csv_is_idempotent() -> None:
     second = client.post("/sync-from-csv", headers=_auth_headers())
     assert second.status_code == 200
     assert second.json() == {"added": 0, "updated": 1}
+
+
+def test_run_discovery_forwards_profile_mode() -> None:
+    _clear_db()
+
+    class Completed:
+        returncode = 0
+        stdout = "ok"
+        stderr = ""
+
+    with patch("app.main.subprocess.run", return_value=Completed()) as mocked:
+        response = client.post(
+            "/run-discovery",
+            json={
+                "limit": 5,
+                "min_score": 1,
+                "max_age_days": 10,
+                "include_stretch": False,
+                "profile": "swe",
+                "api_base_url": "http://127.0.0.1:8000",
+                "verbose": True,
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 200
+    command = mocked.call_args.kwargs["args"] if "args" in mocked.call_args.kwargs else mocked.call_args[0][0]
+    assert "--profile" in command
+    assert "swe" in command
+    assert "--api-base-url" in command
+    assert "http://127.0.0.1:8000" in command
+    assert "--verbose" in command
+
+
+def test_generate_documents_and_workspace_file_editing() -> None:
+    _clear_db()
+    created = client.post(
+        "/applications/upsert",
+        json=_base_payload(company="Northwind", role="Data Engineer", link="https://example.com/jobs/gen-1"),
+        headers=_auth_headers(),
+    )
+    assert created.status_code == 200
+    application_id = created.json()["id"]
+
+    generated = client.post(
+        f"/applications/{application_id}/generate-documents",
+        json={"overwrite": True},
+        headers=_auth_headers(),
+    )
+    assert generated.status_code == 200
+    data = generated.json()
+    assert "/applications/vacancies/" in data["cover_letter_path"]
+    assert data["cv_path"].endswith("/cv.tex")
+
+    read_file = client.get("/workspace-file", params={"path": data["cover_letter_path"]}, headers=_auth_headers())
+    assert read_file.status_code == 200
+    assert "Northwind" in read_file.json()["content"]
+
+    updated_text = read_file.json()["content"] + "\nCustom edit line.\n"
+    write_file = client.put(
+        "/workspace-file",
+        json={"path": data["cover_letter_path"], "content": updated_text},
+        headers=_auth_headers(),
+    )
+    assert write_file.status_code == 200
+    assert "Custom edit line." in write_file.json()["content"]
+
+
+def test_workspace_file_rejects_outside_applications() -> None:
+    _clear_db()
+    response = client.get("/workspace-file", params={"path": "README.md"}, headers=_auth_headers())
+    assert response.status_code == 400
+
+
+def test_workspace_file_read_requires_api_key() -> None:
+    _clear_db()
+    response = client.get("/workspace-file", params={"path": "applications/tracker/application_notes_latest.md"})
+    assert response.status_code == 401
+
+
+def test_generate_documents_overwrite_flow() -> None:
+    _clear_db()
+    target_dir = _APPLICATIONS_ROOT / "vacancies" / "northwind_data_engineer"
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+
+    created = client.post(
+        "/applications/upsert",
+        json=_base_payload(company="Northwind", role="Data Engineer", link="https://example.com/jobs/gen-overwrite"),
+        headers=_auth_headers(),
+    )
+    assert created.status_code == 200
+    application_id = created.json()["id"]
+
+    first = client.post(
+        f"/applications/{application_id}/generate-documents",
+        json={"overwrite": False},
+        headers=_auth_headers(),
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        f"/applications/{application_id}/generate-documents",
+        json={"overwrite": False},
+        headers=_auth_headers(),
+    )
+    assert second.status_code == 409
+
+    cover_template = _TEMPLATE_DIR / "cover_letter.md"
+    original_template = cover_template.read_text(encoding="utf-8")
+    try:
+        cover_template.write_text("OVERWRITTEN [Role Title] at [Company].\n[Author Name]", encoding="utf-8")
+
+        overwritten = client.post(
+            f"/applications/{application_id}/generate-documents",
+            json={"overwrite": True},
+            headers=_auth_headers(),
+        )
+        assert overwritten.status_code == 200
+        path = overwritten.json()["cover_letter_path"]
+
+        read_back = client.get("/workspace-file", params={"path": path}, headers=_auth_headers())
+        assert read_back.status_code == 200
+        content = read_back.json()["content"]
+        assert "OVERWRITTEN" in content
+        assert "Northwind" in content
+    finally:
+        cover_template.write_text(original_template, encoding="utf-8")
