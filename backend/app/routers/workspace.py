@@ -1,12 +1,11 @@
-from datetime import datetime
 from pathlib import Path
-import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..dependencies import get_db, require_write_access
+from ..helpers import slugify, today_iso
 from ..models import JobApplication
 from ..pathing import (
     applications_root,
@@ -34,18 +33,9 @@ def base_cv_template_path() -> Path:
     return resolve_from_applications_root(settings.base_cv_template_path)
 
 
-def _slugify(value: str) -> str:
-    slug = re.sub(r"[^a-zA-Z0-9]+", "_", value.strip().lower()).strip("_")
-    return slug[:80] or "item"
-
-
-def _today_iso() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
-
-
 def _build_docs_directory(record: JobApplication) -> Path:
     vacancies_root = applications_root() / "vacancies"
-    return vacancies_root / f"{_slugify(record.company)}_{_slugify(record.role)}"
+    return vacancies_root / f"{slugify(record.company)}_{slugify(record.role)}"
 
 
 def _render_cover_letter(template_text: str, record: JobApplication, author_name: str) -> str:
@@ -61,7 +51,7 @@ def _render_cover_letter(template_text: str, record: JobApplication, author_name
 
 
 def _render_vacancy_notes(template_text: str, record: JobApplication) -> str:
-    date_found = (record.date_found or "").strip() or _today_iso()
+    date_found = (record.date_found or "").strip() or today_iso()
     source_url = (record.link or "").strip()
     source_url_md = f"[{source_url}]({source_url})" if source_url else "n/a"
     return (

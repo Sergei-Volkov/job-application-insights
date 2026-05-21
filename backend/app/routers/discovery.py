@@ -6,29 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ..config import settings
 from ..dependencies import require_write_access
+from ..helpers import summarize_process_output
 from ..pathing import resolve_from_project_root, resolve_from_workspace_root
 from ..schemas import DiscoveryRunRequest, DiscoveryRunResult
 
 router = APIRouter(tags=["imports"])
-
-
-def _summarize_process_output(text: str, max_chars: int) -> str:
-    text = text.strip()
-    if not text:
-        return ""
-    if max_chars <= 0:
-        return ""
-    if len(text) <= max_chars:
-        return text
-
-    marker = "\n\n... output truncated ...\n\n"
-    if max_chars <= len(marker) + 2:
-        return text[:max_chars]
-
-    visible = max_chars - len(marker)
-    head = visible // 2
-    tail = visible - head
-    return f"{text[:head]}{marker}{text[-tail:]}"
 
 
 @router.post(
@@ -118,7 +100,7 @@ def run_discovery(payload: DiscoveryRunRequest, _: None = Depends(require_write_
         raise HTTPException(status_code=504, detail=f"Discovery run timed out after {exc.timeout} seconds") from exc
 
     if completed.returncode != 0:
-        stderr = _summarize_process_output(completed.stderr, settings.discovery_log_max_chars)
+        stderr = summarize_process_output(completed.stderr, settings.discovery_log_max_chars)
         raise HTTPException(
             status_code=500,
             detail=f"Discovery script failed with exit code {completed.returncode}. stderr: {stderr}",
@@ -127,6 +109,6 @@ def run_discovery(payload: DiscoveryRunRequest, _: None = Depends(require_write_
     return DiscoveryRunResult(
         exit_code=completed.returncode,
         command=command,
-        stdout=_summarize_process_output(completed.stdout, settings.discovery_log_max_chars),
-        stderr=_summarize_process_output(completed.stderr, settings.discovery_log_max_chars),
+        stdout=summarize_process_output(completed.stdout, settings.discovery_log_max_chars),
+        stderr=summarize_process_output(completed.stderr, settings.discovery_log_max_chars),
     )
