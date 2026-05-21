@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bar,
   BarChart,
@@ -14,9 +14,14 @@ import {
   fetchApplications,
   fetchSkills,
   runDiscovery,
+  ApiError,
   fetchStats,
   fetchTrend,
+  generateDocuments,
+  readWorkspaceFile,
   updateApplication,
+  writeWorkspaceFile,
+  type GenerateDocumentsResult,
   type DiscoveryRunResult,
   type ApplicationItem,
   type SkillItem,
@@ -27,7 +32,52 @@ import './App.css'
 
 type EditableRow = ApplicationItem & {
   saving?: boolean
+  generating?: boolean
 }
+
+type DiscoveryProfile = 'de' | 'swe' | 'other'
+
+type ListingFilter = 'all' | 'updated' | 'new'
+
+type GeneratedDocsMap = Record<number, GenerateDocumentsResult>
+
+type RowDocLinks = {
+  vacancyPath?: string
+  notesPath?: string
+  coverLetterPath?: string
+  cvPath?: string
+}
+
+type AppPage = 'pipeline' | 'analytics' | 'discovery'
+
+const DISCOVERY_SOURCES = [
+  { key: 'wwr', label: 'We Work Remotely' },
+  { key: 'working_nomads', label: 'Working Nomads' },
+  { key: 'remoteok', label: 'Remote OK' },
+  { key: 'remotive', label: 'Remotive' },
+  { key: 'arbeitnow', label: 'Arbeitnow' },
+  { key: 'jobicy', label: 'Jobicy' },
+] as const
+
+const NEXT_STEP_CHIP_LABELS: Record<string, string> = {
+  'Review role requirements': 'Review',
+  'Tailor CV': 'Tailor CV',
+  'Write cover letter': 'Cover Letter',
+  'Submit application': 'Submit',
+  'Prepare for interview': 'Interview Prep',
+  'Follow up with recruiter': 'Follow-up',
+  'Wait for response': 'Waiting',
+}
+
+const NEXT_STEP_OPTIONS = [
+  'Review role requirements',
+  'Tailor CV',
+  'Write cover letter',
+  'Submit application',
+  'Prepare for interview',
+  'Follow up with recruiter',
+  'Wait for response',
+]
 
 export default function App() {
   const [stats, setStats] = useState<Stats | null>(null)
@@ -38,10 +88,41 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [discovering, setDiscovering] = useState(false)
   const [discoveryResult, setDiscoveryResult] = useState<DiscoveryRunResult | null>(null)
+  const [discoveryProfile, setDiscoveryProfile] = useState<DiscoveryProfile>('de')
+  const [profileFilter, setProfileFilter] = useState<'all' | DiscoveryProfile>('all')
+  const [listingFilter, setListingFilter] = useState<ListingFilter>('all')
+  const [generatedDocsById, setGeneratedDocsById] = useState<GeneratedDocsMap>({})
+  const [activePage, setActivePage] = useState<AppPage>(() => {
+    const saved = localStorage.getItem('activePage')
+    return (saved as AppPage) || 'pipeline'
+  })
+  const [customNextStepById, setCustomNextStepById] = useState<Record<number, string>>({})
+  const [discoveryParams, setDiscoveryParams] = useState({ limit: 40, min_score: 7, max_age_days: 45, include_stretch: false })
+  const [analyticsProfileFilter, setAnalyticsProfileFilter] = useState<'all' | DiscoveryProfile>('all')
+  const [analyticsListingFilter, setAnalyticsListingFilter] = useState<ListingFilter>('all')
+  const [manualJobForm, setManualJobForm] = useState({ company: '', role: '', link: '', description: '' })
+  const [discoveryCvPath, setDiscoveryCvPath] = useState<string>(() => localStorage.getItem('discoveryCvPath') || '')
+  const [discoveryApiBaseUrl, setDiscoveryApiBaseUrl] = useState<string>(
+    () => localStorage.getItem('discoveryApiBaseUrl') || ''
+  )
+  const [discoveryVerbose, setDiscoveryVerbose] = useState<boolean>(() => localStorage.getItem('discoveryVerbose') === 'true')
+  const [discoverySourceSelection, setDiscoverySourceSelection] = useState<Record<string, boolean>>(
+    () => Object.fromEntries(DISCOVERY_SOURCES.map((source) => [source.key, true]))
+  )
+
+  const [activeFilePath, setActiveFilePath] = useState('')
+  const [fileContent, setFileContent] = useState('')
+  const [fileDraft, setFileDraft] = useState('')
+  const [fileLoading, setFileLoading] = useState(false)
+  const [fileSaving, setFileSaving] = useState(false)
+  const [fileDirty, setFileDirty] = useState(false)
+  const [activeProcessId, setActiveProcessId] = useState<number | null>(null)
+  const [lastProcessFileById, setLastProcessFileById] = useState<Record<number, string>>({})
+  const editorSectionRef = useRef<HTMLElement | null>(null)
 
   const loadDashboard = () => {
     setError(null)
-    Promise.all([fetchStats(), fetchSkills(), fetchTrend(), fetchApplications(30)])
+    Promise.all([fetchStats(), fetchSkills(), fetchTrend(), fetchApplications()])
       .then(([s, sk, t, a]) => {
         setStats(s)
         setSkills(sk)
@@ -52,20 +133,339 @@ export default function App() {
       .finally(() => setLoading(false))
   }
 
+  const normalizedProfile = (row: EditableRow): DiscoveryProfile => {
+    const value = (row.match_profile || '').trim().toLowerCase()
+    if (value === 'swe' || value === 'other') return value
+    return 'de'
+  }
+
+  const isUpdatedListing = (row: EditableRow) =>
+    (row.change_note || '').toLowerCase().includes('updated on')
+
+  const isNewListing = (row: EditableRow) => {
+    const first = (row.first_seen_at || '').trim()
+    const last = (row.last_seen_at || '').trim()
+    return !!first && first === last && !isUpdatedListing(row)
+  }
+
+  useEffect(() => {
+    localStorage.setItem('activePage', activePage)
+  }, [activePage])
+
+  useEffect(() => {
+    localStorage.setItem('discoveryCvPath', discoveryCvPath)
+  }, [discoveryCvPath])
+
+  useEffect(() => {
+    localStorage.setItem('discoveryApiBaseUrl', discoveryApiBaseUrl)
+  }, [discoveryApiBaseUrl])
+
+  useEffect(() => {
+    localStorage.setItem('discoveryVerbose', discoveryVerbose ? 'true' : 'false')
+  }, [discoveryVerbose])
+
   useEffect(() => {
     loadDashboard()
   }, [])
 
-  const statusData = stats
-    ? (Object.entries(stats.by_status) as [string, number][])
-        .sort((a, b) => b[1] - a[1])
-        .map(([name, count]) => ({ name, count }))
-    : []
+  const analyticsFilteredApps = useMemo(() => {
+    return applications.filter((row) => {
+      const profileOk = analyticsProfileFilter === 'all' || normalizedProfile(row) === analyticsProfileFilter
+      const listingOk =
+        analyticsListingFilter === 'all' ||
+        (analyticsListingFilter === 'updated' && isUpdatedListing(row)) ||
+        (analyticsListingFilter === 'new' && isNewListing(row))
+      return profileOk && listingOk
+    })
+  }, [applications, analyticsListingFilter, analyticsProfileFilter])
+
+  const statusData = useMemo(() => {
+    const byStatus: Record<string, number> = {}
+    analyticsFilteredApps.forEach((row) => {
+      const status = row.status || 'To review'
+      byStatus[status] = (byStatus[status] || 0) + 1
+    })
+    return (Object.entries(byStatus) as [string, number][])
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, count]) => ({ name, count }))
+  }, [analyticsFilteredApps])
+
+  const skillData = useMemo(() => {
+    const marker = 'missing or adjacent tools:'
+    const found: string[] = []
+    analyticsFilteredApps.forEach((row) => {
+      const text = (row.notes || '').trim()
+      const lower = text.toLowerCase()
+      if (!lower.includes(marker)) return
+      const idx = lower.indexOf(marker)
+      const raw = text.slice(idx + marker.length)
+      raw
+        .split(',')
+        .map((part) => part.trim().replace(/[.]+$/g, ''))
+        .filter(Boolean)
+        .forEach((part) => found.push(part))
+    })
+
+    if (found.length === 0) return [] as SkillItem[]
+
+    const counts: Record<string, number> = {}
+    found.forEach((skill) => {
+      counts[skill] = (counts[skill] || 0) + 1
+    })
+
+    return (Object.entries(counts) as [string, number][])
+      .sort((a, b) => b[1] - a[1])
+      .map(([skill, count]) => ({ skill, count }))
+  }, [analyticsFilteredApps])
+
+  const trendData = useMemo(() => {
+    const weekCounter: Record<string, number> = {}
+
+    const isoWeek = (value: string) => {
+      const date = new Date(value)
+      if (Number.isNaN(date.getTime())) return ''
+      const utcDate = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()))
+      const day = utcDate.getUTCDay() || 7
+      utcDate.setUTCDate(utcDate.getUTCDate() + 4 - day)
+      const yearStart = new Date(Date.UTC(utcDate.getUTCFullYear(), 0, 1))
+      const weekNo = Math.ceil((((utcDate.getTime() - yearStart.getTime()) / 86400000) + 1) / 7)
+      return `${utcDate.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`
+    }
+
+    analyticsFilteredApps.forEach((row) => {
+      const week = isoWeek((row.date_found || '').trim())
+      if (!week) return
+      weekCounter[week] = (weekCounter[week] || 0) + 1
+    })
+
+    return (Object.entries(weekCounter) as [string, number][])
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([week, count]) => ({ week, count }))
+  }, [analyticsFilteredApps])
 
   const patchLocal = (id: number, patch: Partial<EditableRow>) => {
     setApplications((prev: EditableRow[]) =>
       prev.map((row: EditableRow) => (row.id === id ? { ...row, ...patch } : row))
     )
+  }
+
+  const filteredApplications = useMemo(() => {
+    return applications.filter((row) => {
+      const profileOk = profileFilter === 'all' || normalizedProfile(row) === profileFilter
+      const listingOk =
+        listingFilter === 'all' ||
+        (listingFilter === 'updated' && isUpdatedListing(row)) ||
+        (listingFilter === 'new' && isNewListing(row))
+      return profileOk && listingOk
+    })
+  }, [applications, listingFilter, profileFilter])
+
+  const activeProcessRow = useMemo(
+    () => applications.find((row) => row.id === activeProcessId) ?? null,
+    [applications, activeProcessId]
+  )
+
+  const activeFileExt = useMemo(() => {
+    const lowered = activeFilePath.trim().toLowerCase()
+    if (lowered.endsWith('.md')) return 'md'
+    if (lowered.endsWith('.tex')) return 'tex'
+    return ''
+  }, [activeFilePath])
+
+  const escapeHtml = (value: string) =>
+    value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;')
+
+  const renderMarkdownPreview = (source: string) => {
+    const lines = source.replace(/\r\n/g, '\n').split('\n')
+    const chunks: string[] = []
+    let inList = false
+    let inCode = false
+
+    for (const rawLine of lines) {
+      const line = rawLine
+
+      if (line.trim().startsWith('```')) {
+        if (inCode) {
+          chunks.push('</code></pre>')
+        } else {
+          chunks.push('<pre><code>')
+        }
+        inCode = !inCode
+        continue
+      }
+
+      if (inCode) {
+        chunks.push(`${escapeHtml(line)}\n`)
+        continue
+      }
+
+      const heading = line.match(/^(#{1,6})\s+(.*)$/)
+      if (heading) {
+        if (inList) {
+          chunks.push('</ul>')
+          inList = false
+        }
+        const level = heading[1].length
+        chunks.push(`<h${level}>${escapeHtml(heading[2])}</h${level}>`)
+        continue
+      }
+
+      const bullet = line.match(/^\s*[-*+]\s+(.*)$/)
+      if (bullet) {
+        if (!inList) {
+          chunks.push('<ul>')
+          inList = true
+        }
+        chunks.push(`<li>${escapeHtml(bullet[1])}</li>`)
+        continue
+      }
+
+      if (inList) {
+        chunks.push('</ul>')
+        inList = false
+      }
+
+      if (!line.trim()) {
+        chunks.push('<div class="preview-paragraph spacer"></div>')
+        continue
+      }
+
+      const inline = escapeHtml(line)
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/__(.+?)__/g, '<strong>$1</strong>')
+        .replace(/(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)/g, '<em>$1</em>')
+        .replace(/_(.+?)_/g, '<em>$1</em>')
+        .replace(/`(.+?)`/g, '<code>$1</code>')
+        .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
+
+      chunks.push(`<p class="preview-paragraph">${inline}</p>`)
+    }
+
+    if (inList) chunks.push('</ul>')
+    if (inCode) chunks.push('</code></pre>')
+
+    return chunks.join('\n') || '<p class="preview-empty">No preview content.</p>'
+  }
+
+  const renderTexPreview = (source: string) => {
+    const normalized = source.replace(/\r\n/g, '\n')
+    const lines = normalized.split('\n')
+    const chunks: string[] = []
+    let inList = false
+
+    const flushList = () => {
+      if (inList) {
+        chunks.push('</ul>')
+        inList = false
+      }
+    }
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim()
+      if (!line) {
+        flushList()
+        chunks.push('<div class="preview-paragraph spacer"></div>')
+        continue
+      }
+
+      const section = line.match(/^\\(sub)*section\{(.+?)\}/)
+      if (section) {
+        flushList()
+        const level = line.startsWith('\\subsection') ? 3 : 2
+        chunks.push(`<h${level}>${escapeHtml(section[2])}</h${level}>`)
+        continue
+      }
+
+      if (line.startsWith('\\begin{itemize}')) {
+        flushList()
+        chunks.push('<ul>')
+        inList = true
+        continue
+      }
+
+      if (line.startsWith('\\end{itemize}')) {
+        flushList()
+        continue
+      }
+
+      const item = line.match(/^\\item\s*(.*)$/)
+      if (item) {
+        if (!inList) {
+          chunks.push('<ul>')
+          inList = true
+        }
+        chunks.push(`<li>${escapeHtml(item[1])}</li>`)
+        continue
+      }
+
+      const cleaned = escapeHtml(line)
+        .replace(/\\textbf\{(.+?)\}/g, '<strong>$1</strong>')
+        .replace(/\\textit\{(.+?)\}/g, '<em>$1</em>')
+        .replace(/\\href\{(.+?)\}\{(.+?)\}/g, '<a href="$1" target="_blank" rel="noreferrer">$2</a>')
+        .replace(/\\[a-zA-Z]+\*?(?:\[[^\]]*\])?(?:\{[^}]*\})?/g, '')
+
+      chunks.push(`<p class="preview-paragraph">${cleaned}</p>`)
+    }
+
+    flushList()
+    return chunks.join('\n') || '<p class="preview-empty">No preview content.</p>'
+  }
+
+  const previewHtml = useMemo(() => {
+    if (activeFileExt === 'md') return renderMarkdownPreview(fileDraft)
+    if (activeFileExt === 'tex') return renderTexPreview(fileDraft)
+    return ''
+  }, [activeFileExt, fileDraft])
+
+  const getRowDocLinks = (row: EditableRow): RowDocLinks => {
+    const generated = generatedDocsById[row.id]
+    if (generated) {
+      return {
+        vacancyPath: generated.vacancy_path,
+        notesPath: generated.notes_path,
+        coverLetterPath: generated.cover_letter_path,
+        cvPath: generated.cv_path,
+      }
+    }
+
+    const cover = (row.cover_letter_ref || '').replace(/\\/g, '/')
+    const cv = (row.resume_ref || '').replace(/\\/g, '/')
+    const candidate = cover || cv
+    if (!candidate) {
+      return {
+        coverLetterPath: cover || undefined,
+        cvPath: cv || undefined,
+      }
+    }
+
+    const coverSuffix = '/cover_letter.md'
+    const cvSuffix = '/cv.tex'
+    let baseDir = ''
+
+    if (candidate.endsWith(coverSuffix)) {
+      baseDir = candidate.slice(0, -coverSuffix.length)
+    } else if (candidate.endsWith(cvSuffix)) {
+      baseDir = candidate.slice(0, -cvSuffix.length)
+    }
+
+    if (!baseDir) {
+      return {
+        coverLetterPath: cover || undefined,
+        cvPath: cv || undefined,
+      }
+    }
+
+    return {
+      vacancyPath: `${baseDir}/vacancy.md`,
+      notesPath: `${baseDir}/notes.md`,
+      coverLetterPath: cover || `${baseDir}/cover_letter.md`,
+      cvPath: cv || `${baseDir}/cv.tex`,
+    }
   }
 
   const saveRow = async (row: EditableRow) => {
@@ -88,11 +488,172 @@ export default function App() {
     }
   }
 
+  const isStandardNextStep = (value: string | undefined) => !!value && NEXT_STEP_OPTIONS.includes(value)
+
+  const nextStepSelectValue = (row: EditableRow) => {
+    const value = (row.next_step || '').trim()
+    if (!value) return ''
+    return isStandardNextStep(value) ? value : '__custom__'
+  }
+
+  const handleNextStepSelect = (row: EditableRow, selected: string) => {
+    if (selected === '__custom__') {
+      const current = (row.next_step || '').trim()
+      const customValue = customNextStepById[row.id] ?? (isStandardNextStep(current) ? '' : current)
+      setCustomNextStepById((prev) => ({ ...prev, [row.id]: customValue }))
+      patchLocal(row.id, { next_step: customValue })
+      return
+    }
+
+    patchLocal(row.id, { next_step: selected })
+  }
+
+  const startProcessForRow = async (row: EditableRow) => {
+    setActiveProcessId(row.id)
+    const rowDocs = getRowDocLinks(row)
+    const preferredPath =
+      lastProcessFileById[row.id] || rowDocs.vacancyPath || rowDocs.notesPath || rowDocs.coverLetterPath || rowDocs.cvPath
+
+    if (preferredPath) {
+      await openWorkspaceFile(preferredPath)
+    }
+
+    requestAnimationFrame(() => {
+      editorSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }
+
+  const openProcessFile = async (rowId: number, path: string) => {
+    setLastProcessFileById((prev) => ({ ...prev, [rowId]: path }))
+    await openWorkspaceFile(path)
+  }
+
+  const toggleApplied = async (row: EditableRow, checked: boolean) => {
+    const previous = {
+      selected: row.selected,
+      date_applied: row.date_applied,
+      status: row.status,
+    }
+
+    const nextStatus = checked
+      ? 'Applied'
+      : (row.status || '').toLowerCase() === 'applied'
+      ? 'To review'
+      : row.status || 'To review'
+
+    const patch = {
+      selected: checked ? 'yes' : 'no',
+      date_applied: checked ? new Date().toISOString().slice(0, 10) : '',
+      status: nextStatus,
+    }
+
+    patchLocal(row.id, { ...patch, saving: true })
+    try {
+      const updated = await updateApplication(row.id, patch)
+      patchLocal(row.id, { ...updated, saving: false })
+    } catch (e) {
+      patchLocal(row.id, { ...previous, saving: false })
+      setError(e instanceof Error ? e.message : 'Failed to update application status')
+    }
+  }
+
+  const generateDocsForRow = async (row: EditableRow, overwrite = false) => {
+    if (overwrite) {
+      const confirmed = window.confirm(
+        'Regenerate and overwrite existing vacancy files for this role? Existing file content will be replaced.'
+      )
+      if (!confirmed) return
+    }
+
+    patchLocal(row.id, { generating: true })
+    setError(null)
+    try {
+      const generated = await generateDocuments(row.id, {
+        overwrite,
+        author_name: undefined,
+      })
+      setGeneratedDocsById((prev) => ({ ...prev, [row.id]: generated }))
+      patchLocal(row.id, {
+        resume_ref: generated.cv_path,
+        cover_letter_ref: generated.cover_letter_path,
+        generating: false,
+      })
+      await openWorkspaceFile(generated.cover_letter_path)
+    } catch (e) {
+      patchLocal(row.id, { generating: false })
+      if (e instanceof ApiError && e.status === 409) {
+        setError(`${e.message}. Use Regenerate to overwrite files when needed.`)
+      } else {
+        setError(e instanceof Error ? e.message : 'Failed to generate tailored files')
+      }
+    }
+  }
+
+  const openWorkspaceFile = async (path: string) => {
+    if (!path.trim()) return
+    if (fileDirty && activeFilePath && activeFilePath !== path) {
+      const confirmed = window.confirm('Unsaved editor changes detected. Discard changes and open another file?')
+      if (!confirmed) return
+    }
+
+    setFileLoading(true)
+    setError(null)
+    try {
+      const loaded = await readWorkspaceFile(path)
+      setActiveFilePath(loaded.path)
+      setFileContent(loaded.content)
+      setFileDraft(loaded.content)
+      setFileDirty(false)
+    } catch (e) {
+      const fallback = 'Failed to open file'
+      if (e instanceof Error) {
+        if (e.message.includes('404')) {
+          setError(`File not found: ${path}. It may have been moved or deleted. Regenerate docs or update the file path.`)
+        } else {
+          setError(e.message || fallback)
+        }
+      } else {
+        setError(fallback)
+      }
+    } finally {
+      setFileLoading(false)
+    }
+  }
+
+  const saveFile = async () => {
+    if (!activeFilePath) return
+    setFileSaving(true)
+    setError(null)
+    try {
+      const saved = await writeWorkspaceFile(activeFilePath, fileDraft)
+      setFileContent(saved.content)
+      setFileDraft(saved.content)
+      setFileDirty(false)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to save file')
+    } finally {
+      setFileSaving(false)
+    }
+  }
+
   const triggerDiscovery = async () => {
     setDiscovering(true)
     setError(null)
     try {
-      const result = await runDiscovery({ limit: 40, min_score: 7, max_age_days: 45 })
+      const selectedSources = DISCOVERY_SOURCES.map((source) => source.key).filter(
+        (sourceKey) => discoverySourceSelection[sourceKey]
+      )
+      const result = await runDiscovery({
+        limit: discoveryParams.limit,
+        min_score: discoveryParams.min_score,
+        max_age_days: discoveryParams.max_age_days,
+        include_stretch: discoveryParams.include_stretch,
+        profile: discoveryProfile,
+        cv_path: discoveryCvPath.trim() || undefined,
+        api_base_url: discoveryApiBaseUrl.trim() || undefined,
+        verbose: discoveryVerbose,
+        sources: selectedSources,
+      })
       setDiscoveryResult(result)
       setLoading(true)
       loadDashboard()
@@ -106,196 +667,614 @@ export default function App() {
   return (
     <div className="container">
       <header>
-        <h1>Job Application Insights</h1>
-        <p className="subtitle">FastAPI · SQLAlchemy · React · TypeScript</p>
-        <div className="toolbar">
-          <button className="save-btn" disabled={discovering} onClick={() => void triggerDiscovery()}>
-            {discovering ? 'Running discovery...' : 'Run discovery'}
-          </button>
+        <div>
+          <h1>Job Application Insights</h1>
+          <p className="subtitle">FastAPI · SQLAlchemy · React · TypeScript</p>
         </div>
+        <nav className="view-tabs" aria-label="Main views">
+          <button
+            className={`tab-btn${activePage === 'pipeline' ? ' active' : ''}`}
+            onClick={() => setActivePage('pipeline')}
+          >
+            Tracker
+          </button>
+          <button
+            className={`tab-btn${activePage === 'analytics' ? ' active' : ''}`}
+            onClick={() => setActivePage('analytics')}
+          >
+            Analytics
+          </button>
+          <button
+            className={`tab-btn${activePage === 'discovery' ? ' active' : ''}`}
+            onClick={() => setActivePage('discovery')}
+          >
+            Discovery
+          </button>
+        </nav>
       </header>
 
       {error && <div className="error-banner">{error}</div>}
-      {discoveryResult && (
-        <div className="result-banner">
-          <strong>Discovery exit code:</strong> {discoveryResult.exit_code}
-          {discoveryResult.stdout && <pre>{discoveryResult.stdout}</pre>}
-          {discoveryResult.stderr && <pre>{discoveryResult.stderr}</pre>}
-        </div>
-      )}
 
       {loading ? (
         <p className="empty-state">Loading…</p>
       ) : (
         <>
-          <section className="grid top-grid">
-            <div className="card stat-card">
-              <h2>Total Applications</h2>
-              <p className="metric">{stats?.total_applications ?? '—'}</p>
-            </div>
+          {activePage === 'analytics' && (
+            <>
+              <section className="card">
+                <div className="filters-row">
+                  <label htmlFor="analytics-profile-filter">Match profile</label>
+                  <select
+                    id="analytics-profile-filter"
+                    className="text-input select-input compact-input"
+                    value={analyticsProfileFilter}
+                    onChange={(e) => setAnalyticsProfileFilter(e.target.value as 'all' | DiscoveryProfile)}
+                  >
+                    <option value="all">All</option>
+                    <option value="de">DE</option>
+                    <option value="swe">SWE</option>
+                    <option value="other">Other</option>
+                  </select>
+                  <label htmlFor="analytics-listing-filter">Listing</label>
+                  <select
+                    id="analytics-listing-filter"
+                    className="text-input select-input compact-input"
+                    value={analyticsListingFilter}
+                    onChange={(e) => setAnalyticsListingFilter(e.target.value as ListingFilter)}
+                  >
+                    <option value="all">All</option>
+                    <option value="new">New</option>
+                    <option value="updated">Updated</option>
+                  </select>
+                </div>
+              </section>
+              <section className="grid top-grid">
+                <div className="card stat-card">
+                  <h2>Total Applications</h2>
+                  <p className="metric">{analyticsFilteredApps.length}</p>
+                </div>
 
-            <div className="card chart-card">
-              <h2>By Status</h2>
-              <ResponsiveContainer width="100%" height={180}>
-                <BarChart data={statusData} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
-                  <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                  <Tooltip />
-                  <Bar dataKey="count" fill="#0f766e" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </section>
+                <div className="card chart-card">
+                  <h2>By Status</h2>
+                  <ResponsiveContainer width="100%" height={180}>
+                    <BarChart data={statusData} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
+                      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                      <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+                      <Tooltip />
+                      <Bar dataKey="count" fill="#0f766e" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </section>
 
-          <section className="grid bottom-grid">
-            <div className="card chart-card">
-              <h2>Skill Gaps</h2>
-              <ResponsiveContainer width="100%" height={240}>
-                <BarChart
-                  data={skills}
-                  layout="vertical"
-                  margin={{ top: 4, right: 16, left: 0, bottom: 0 }}
-                >
-                  <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} />
-                  <YAxis type="category" dataKey="skill" width={90} tick={{ fontSize: 11 }} />
-                  <Tooltip />
-                  <Bar dataKey="count" fill="#0369a1" radius={[0, 4, 4, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+              <section className="grid bottom-grid">
+                <div className="card chart-card">
+                  <h2>Skill Gaps</h2>
+                  {skillData.length === 0 ? (
+                    <p className="empty-state">No missing-skill markers in filtered rows.</p>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={240}>
+                      <BarChart
+                        data={skillData}
+                        layout="vertical"
+                        margin={{ top: 4, right: 16, left: 0, bottom: 0 }}
+                      >
+                        <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} />
+                        <YAxis type="category" dataKey="skill" width={90} tick={{ fontSize: 11 }} />
+                        <Tooltip />
+                        <Bar dataKey="count" fill="#0369a1" radius={[0, 4, 4, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
 
-            <div className="card chart-card">
-              <h2>Weekly Trend</h2>
-              {trend.length === 0 ? (
-                <p className="empty-state">No dated applications yet.</p>
-              ) : (
-                <ResponsiveContainer width="100%" height={240}>
-                  <LineChart data={trend} margin={{ top: 4, right: 16, left: -16, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="week" tick={{ fontSize: 10 }} />
-                    <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                    <Tooltip />
-                    <Line
-                      type="monotone"
-                      dataKey="count"
-                      stroke="#0f766e"
-                      strokeWidth={2}
-                      dot={{ r: 4 }}
-                      activeDot={{ r: 6 }}
+                <div className="card chart-card">
+                  <h2>Weekly Trend</h2>
+                  {trendData.length === 0 ? (
+                    <p className="empty-state">No dated applications yet.</p>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={240}>
+                      <LineChart data={trendData} margin={{ top: 4, right: 16, left: -16, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="week" tick={{ fontSize: 10 }} />
+                        <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+                        <Tooltip />
+                        <Line
+                          type="monotone"
+                          dataKey="count"
+                          stroke="#0f766e"
+                          strokeWidth={2}
+                          dot={{ r: 4 }}
+                          activeDot={{ r: 6 }}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
+              </section>
+            </>
+          )}
+
+          {activePage === 'discovery' && (
+            <>
+              <section className="card">
+                <h2>Discovery</h2>
+                <p className="subtitle small">Run job discovery or add jobs manually.</p>
+                <div className="toolbar">
+                  <label className="toolbar-label" htmlFor="discovery-profile">
+                    Profile
+                  </label>
+                  <select
+                    id="discovery-profile"
+                    className="text-input select-input compact-input"
+                    value={discoveryProfile}
+                    onChange={(e) => setDiscoveryProfile(e.target.value as DiscoveryProfile)}
+                  >
+                    <option value="de">DE</option>
+                    <option value="swe">SWE</option>
+                    <option value="other">Other</option>
+                  </select>
+                  <label className="toolbar-label" htmlFor="discovery-limit">
+                    Limit
+                  </label>
+                  <input
+                    id="discovery-limit"
+                    className="text-input compact-input"
+                    type="number"
+                    value={discoveryParams.limit}
+                    onChange={(e) => setDiscoveryParams({ ...discoveryParams, limit: parseInt(e.target.value) || 40 })}
+                    min="1"
+                  />
+                  <label className="toolbar-label" htmlFor="discovery-min-score">
+                    Min score
+                  </label>
+                  <input
+                    id="discovery-min-score"
+                    className="text-input compact-input"
+                    type="number"
+                    value={discoveryParams.min_score}
+                    onChange={(e) => setDiscoveryParams({ ...discoveryParams, min_score: parseInt(e.target.value) || 7 })}
+                    min="1"
+                  />
+                </div>
+                <div className="toolbar" style={{ marginTop: '8px' }}>
+                  <label className="toolbar-label" htmlFor="discovery-cv-path">
+                    CV path
+                  </label>
+                  <input
+                    id="discovery-cv-path"
+                    className="text-input"
+                    type="text"
+                    placeholder="applications/resumes/CV.tex"
+                    value={discoveryCvPath}
+                    onChange={(e) => setDiscoveryCvPath(e.target.value)}
+                    style={{ minWidth: '260px', flex: 1 }}
+                    title="CV path used for discovery scoring. Accepts workspace-relative or absolute paths."
+                  />
+                </div>
+                <p className="subtitle small" style={{ marginTop: '8px', marginBottom: '8px' }}>
+                  CV path is a per-run input. If empty, backend uses DISCOVERY_CV_PATH fallback from .env.
+                </p>
+                <details className="details-panel" style={{ marginTop: '8px' }}>
+                  <summary className="muted-mini">Advanced discovery params</summary>
+                  <div className="toolbar" style={{ marginTop: '8px' }}>
+                    <label className="toolbar-label" htmlFor="discovery-api-base-url">
+                      API base URL
+                    </label>
+                    <input
+                      id="discovery-api-base-url"
+                      className="text-input"
+                      type="text"
+                      placeholder="http://127.0.0.1:8000"
+                      value={discoveryApiBaseUrl}
+                      onChange={(e) => setDiscoveryApiBaseUrl(e.target.value)}
+                      style={{ minWidth: '240px', flex: 1 }}
+                      title="Optional override passed to job_finder --api-base-url."
                     />
-                  </LineChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </section>
-
-          <section className="card applications-card">
-            <h2>Application Tracker</h2>
-            <p className="subtitle small">Edit status, next step, follow-up date, and resume/cover references per role.</p>
-
-            <div className="table-wrap">
-              <table className="apps-table">
-                <thead>
-                  <tr>
-                    <th>Applied</th>
-                    <th>Company / Role</th>
-                    <th>Status</th>
-                    <th>Next Step</th>
-                    <th>Follow-up</th>
-                    <th>Resume Ref</th>
-                    <th>Cover Letter Ref</th>
-                    <th>Save</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {applications.map((row) => (
-                    <tr key={row.id}>
-                      <td>
+                    <label className="toolbar-label" title="Enable verbose source diagnostics in discovery output.">
+                      <input
+                        type="checkbox"
+                        checked={discoveryVerbose}
+                        onChange={(e) => setDiscoveryVerbose(e.target.checked)}
+                        style={{ marginRight: '4px' }}
+                      />
+                      Verbose logs
+                    </label>
+                  </div>
+                </details>
+                <div className="toolbar" style={{ marginTop: '8px' }}>
+                  <label className="toolbar-label" htmlFor="discovery-max-age">
+                    Max age (days)
+                  </label>
+                  <input
+                    id="discovery-max-age"
+                    className="text-input compact-input"
+                    type="number"
+                    value={discoveryParams.max_age_days}
+                    onChange={(e) => setDiscoveryParams({ ...discoveryParams, max_age_days: parseInt(e.target.value) || 45 })}
+                    min="1"
+                  />
+                  <label
+                    className="toolbar-label"
+                    title="Include lower-fit adjacent roles (Stretch) in shortlist results"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={discoveryParams.include_stretch}
+                      onChange={(e) => setDiscoveryParams({ ...discoveryParams, include_stretch: e.target.checked })}
+                      style={{ marginRight: '4px' }}
+                    />
+                    Include stretch
+                  </label>
+                  <button className="save-btn" disabled={discovering} onClick={() => void triggerDiscovery()}>
+                    {discovering ? 'Running...' : 'Run discovery'}
+                  </button>
+                </div>
+                <div className="details-panel" style={{ marginTop: '10px' }}>
+                  <strong className="muted-mini">Websites</strong>
+                  <div className="process-actions">
+                    {DISCOVERY_SOURCES.map((source) => (
+                      <label key={source.key} className="toolbar-label" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                         <input
                           type="checkbox"
-                          checked={row.selected.toLowerCase() === 'yes'}
+                          checked={!!discoverySourceSelection[source.key]}
                           onChange={(e) =>
-                            patchLocal(row.id, {
-                              selected: e.target.checked ? 'yes' : 'no',
-                              date_applied: e.target.checked
-                                ? new Date().toISOString().slice(0, 10)
-                                : '',
-                              status: e.target.checked ? 'Applied' : row.status,
-                            })
+                            setDiscoverySourceSelection((prev) => ({
+                              ...prev,
+                              [source.key]: e.target.checked,
+                            }))
                           }
                         />
-                      </td>
-                      <td>
-                        <div className="role-cell">
-                          <strong>{row.company}</strong>
-                          <span>{row.role}</span>
-                        </div>
-                      </td>
-                      <td>
-                        <select
-                          className="text-input select-input"
-                          value={row.status || 'To review'}
-                          onChange={(e) => patchLocal(row.id, { status: e.target.value })}
-                        >
-                          <option>To review</option>
-                          <option>Applied</option>
-                          <option>Interview</option>
-                          <option>Offer</option>
-                          <option>Rejected</option>
-                          <option>Saved</option>
-                        </select>
-                      </td>
-                      <td>
-                        <input
-                          className="text-input"
-                          value={row.next_step || ''}
-                          onChange={(e) => patchLocal(row.id, { next_step: e.target.value })}
-                          placeholder="Tailor CV and apply soon"
-                        />
-                      </td>
-                      <td>
-                        <input
-                          className="text-input date-input"
-                          type="date"
-                          value={row.follow_up_date || ''}
-                          onChange={(e) => patchLocal(row.id, { follow_up_date: e.target.value })}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          className="text-input"
-                          value={row.resume_ref || ''}
-                          onChange={(e) => patchLocal(row.id, { resume_ref: e.target.value })}
-                          placeholder="resume_v2.pdf"
-                        />
-                      </td>
-                      <td>
-                        <input
-                          className="text-input"
-                          value={row.cover_letter_ref || ''}
-                          onChange={(e) => patchLocal(row.id, { cover_letter_ref: e.target.value })}
-                          placeholder="cover_letter_v2.md"
-                        />
-                      </td>
-                      <td>
+                        {source.label}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                {discoveryResult && (
+                  <div className="result-banner">
+                    <strong>Discovery exit code:</strong> {discoveryResult.exit_code}
+                    {discoveryResult.stdout && <pre>{discoveryResult.stdout}</pre>}
+                    {discoveryResult.stderr && <pre>{discoveryResult.stderr}</pre>}
+                  </div>
+                )}
+              </section>
+              <section className="card">
+                <h2>Add Job Manually</h2>
+                <p className="subtitle small">Create a new job entry without discovery.</p>
+                <div className="toolbar">
+                  <input
+                    className="text-input"
+                    type="text"
+                    placeholder="Company"
+                    value={manualJobForm.company}
+                    onChange={(e) => setManualJobForm({ ...manualJobForm, company: e.target.value })}
+                  />
+                  <input
+                    className="text-input"
+                    type="text"
+                    placeholder="Role"
+                    value={manualJobForm.role}
+                    onChange={(e) => setManualJobForm({ ...manualJobForm, role: e.target.value })}
+                  />
+                  <input
+                    className="text-input"
+                    type="url"
+                    placeholder="Job link (optional)"
+                    value={manualJobForm.link}
+                    onChange={(e) => setManualJobForm({ ...manualJobForm, link: e.target.value })}
+                  />
+                </div>
+                <div style={{ marginTop: '8px' }}>
+                  <label className="muted-mini" style={{ display: 'block', marginBottom: '4px' }}>Job description or notes (optional)</label>
+                  <textarea
+                    className="notes-input"
+                    value={manualJobForm.description}
+                    onChange={(e) => setManualJobForm({ ...manualJobForm, description: e.target.value })}
+                    placeholder="Paste job description, key requirements, or any notes..."
+                    style={{ minHeight: '80px' }}
+                  />
+                  <button
+                    className="save-btn"
+                    onClick={async () => {
+                      if (manualJobForm.company.trim() && manualJobForm.role.trim()) {
+                        try {
+                          await updateApplication(0, {
+                            company: manualJobForm.company,
+                            role: manualJobForm.role,
+                            link: manualJobForm.link,
+                            notes: manualJobForm.description,
+                            status: 'To review',
+                            match_profile: discoveryProfile,
+                            source: 'manual',
+                          } as any)
+                          setManualJobForm({ company: '', role: '', link: '', description: '' })
+                          setLoading(true)
+                          loadDashboard()
+                          setError('Job added successfully')
+                        } catch (e) {
+                          setError(e instanceof Error ? e.message : 'Failed to add job')
+                        }
+                      } else {
+                        setError('Company and role are required')
+                      }
+                    }}
+                    style={{ marginTop: '8px' }}
+                  >
+                    Add job
+                  </button>
+                </div>
+              </section>
+            </>
+          )}
+
+          {activePage === 'pipeline' && (
+            <>
+              <section className="card applications-card">
+                <h2>Application Tracker</h2>
+                <p className="subtitle small">Track status, keep notes, and manage generated docs in one place.</p>
+
+                <div className="filters-row">
+                  <label htmlFor="profile-filter">Match profile</label>
+                  <select
+                    id="profile-filter"
+                    className="text-input select-input compact-input"
+                    value={profileFilter}
+                    onChange={(e) => setProfileFilter(e.target.value as 'all' | DiscoveryProfile)}
+                  >
+                    <option value="all">All</option>
+                    <option value="de">DE</option>
+                    <option value="swe">SWE</option>
+                    <option value="other">Other</option>
+                  </select>
+
+                  <label htmlFor="listing-filter">Listing</label>
+                  <select
+                    id="listing-filter"
+                    className="text-input select-input compact-input"
+                    value={listingFilter}
+                    onChange={(e) => setListingFilter(e.target.value as ListingFilter)}
+                  >
+                    <option value="all">All</option>
+                    <option value="new">New</option>
+                    <option value="updated">Updated</option>
+                  </select>
+                </div>
+
+                <div className="table-wrap">
+                  <table className="apps-table">
+                    <thead>
+                      <tr>
+                        <th>Applied</th>
+                        <th>Role</th>
+                        <th>Stage</th>
+                        <th>Due</th>
+                        <th>Process</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredApplications.map((row) => {
+                        const rowDocs = getRowDocLinks(row)
+                        return (
+                          <tr key={row.id}>
+                            <td>
+                              <input
+                                type="checkbox"
+                                checked={row.selected.toLowerCase() === 'yes'}
+                                disabled={!!row.saving}
+                                onChange={(e) => {
+                                  void toggleApplied(row, e.target.checked)
+                                }}
+                              />
+                            </td>
+                            <td>
+                              <div className="role-cell">
+                                <div className="role-title-row">
+                                  <strong>{row.company}</strong>
+                                  <span className="profile-pill">{normalizedProfile(row).toUpperCase()}</span>
+                                </div>
+                                <span>{row.role}</span>
+                                {isUpdatedListing(row) && <span className="status-pill">Updated</span>}
+                                {!isUpdatedListing(row) && isNewListing(row) && <span className="status-pill">New</span>}
+                              </div>
+                            </td>
+                            <td>
+                              <div className="stage-stack">
+                                <select
+                                  className="text-input select-input"
+                                  value={row.status || 'To review'}
+                                  onChange={(e) => patchLocal(row.id, { status: e.target.value })}
+                                >
+                                  <option value="To review">To review</option>
+                                  <option value="Applied">Applied</option>
+                                  <option value="Interview">Interview</option>
+                                  <option value="Offer">Offer</option>
+                                  <option value="Rejected">Rejected</option>
+                                  <option value="Saved">Saved</option>
+                                </select>
+                                <select
+                                  className="text-input select-input next-step-input"
+                                  value={nextStepSelectValue(row)}
+                                  onChange={(e) => handleNextStepSelect(row, e.target.value)}
+                                >
+                                  <option value="">None</option>
+                                  {NEXT_STEP_OPTIONS.map((option) => (
+                                    <option key={option} value={option}>
+                                      {option}
+                                    </option>
+                                  ))}
+                                  <option value="__custom__">Custom</option>
+                                </select>
+                                {nextStepSelectValue(row) === '__custom__' && (
+                                  <input
+                                    className="text-input"
+                                    value={customNextStepById[row.id] ?? row.next_step ?? ''}
+                                    onChange={(e) => {
+                                      const value = e.target.value
+                                      setCustomNextStepById((prev) => ({ ...prev, [row.id]: value }))
+                                      patchLocal(row.id, { next_step: value })
+                                    }}
+                                    placeholder="Type custom next step"
+                                  />
+                                )}
+                              </div>
+                            </td>
+                            <td>
+                              <input
+                                className="text-input date-input"
+                                type="date"
+                                value={row.follow_up_date || ''}
+                                onChange={(e) => patchLocal(row.id, { follow_up_date: e.target.value })}
+                              />
+                            </td>
+                            <td>
+                              <button
+                                className="secondary-btn"
+                                title="Open this role in the editor workflow"
+                                onClick={() => {
+                                  void startProcessForRow(row)
+                                }}
+                              >
+                                Process
+                              </button>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section className="card editor-card editor-sticky" ref={editorSectionRef}>
+                <h2>File Editor</h2>
+                <p className="subtitle small">Use Process on a row, generate/open files here, then edit and save.</p>
+                {activeProcessRow && (
+                  <div className="details-panel process-panel" style={{ marginBottom: '10px' }}>
+                    <strong>{activeProcessRow.company} - {activeProcessRow.role}</strong>
+                    <div className="docs-actions process-actions" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(110px, max-content))' }}>
+                      {(() => {
+                        const docs = getRowDocLinks(activeProcessRow)
+                        const hasAnyDocs = !!(docs.vacancyPath || docs.notesPath || docs.coverLetterPath || docs.cvPath)
+                        return (
+                          <>
+                            {!hasAnyDocs && (
+                              <span className="muted-mini">
+                                No generated files yet. Click Generate files to create Vacancy, Notes, Cover, and CV.
+                              </span>
+                            )}
+                            {docs.vacancyPath && (
+                              <button className="link-btn" title="Open generated vacancy snapshot (read-only)" onClick={() => void openProcessFile(activeProcessRow.id, docs.vacancyPath || '')}>
+                                Vacancy
+                              </button>
+                            )}
+                            {docs.notesPath && (
+                              <button className="link-btn" title="Open editable notes file" onClick={() => void openProcessFile(activeProcessRow.id, docs.notesPath || '')}>
+                                Notes
+                              </button>
+                            )}
+                            {docs.coverLetterPath && (
+                              <button className="link-btn" title="Open editable cover letter" onClick={() => void openProcessFile(activeProcessRow.id, docs.coverLetterPath || '')}>
+                                Cover
+                              </button>
+                            )}
+                            {docs.cvPath && (
+                              <button className="link-btn" title="Open editable CV (LaTeX)" onClick={() => void openProcessFile(activeProcessRow.id, docs.cvPath || '')}>
+                                CV
+                              </button>
+                            )}
+                          </>
+                        )
+                      })()}
+                      {!(() => {
+                        const docs = getRowDocLinks(activeProcessRow)
+                        return !!(activeProcessRow.resume_ref || activeProcessRow.cover_letter_ref || docs.vacancyPath || docs.notesPath)
+                      })() ? (
                         <button
-                          className="save-btn"
-                          disabled={!!row.saving}
+                          className="secondary-btn process-generate-btn"
+                          title="Generate role files from templates"
+                          disabled={!!activeProcessRow.generating}
                           onClick={() => {
-                            void saveRow(row)
+                            void generateDocsForRow(activeProcessRow)
                           }}
                         >
-                          {row.saving ? 'Saving...' : 'Save'}
+                          {activeProcessRow.generating ? 'Generating...' : 'Generate files'}
                         </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
+                      ) : (
+                        <button
+                          className="secondary-btn process-generate-btn"
+                          title="Regenerate and overwrite existing role files"
+                          disabled={!!activeProcessRow.generating}
+                          onClick={() => {
+                            void generateDocsForRow(activeProcessRow, true)
+                          }}
+                        >
+                          {activeProcessRow.generating ? 'Generating...' : 'Regenerate files'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {activeFilePath ? (
+                  <>
+                    <div className="editor-head">
+                      <span className="editor-path">{activeFilePath}</span>
+                      <button
+                        className="save-btn"
+                        title={activeFilePath.endsWith('/vacancy.md') ? 'Vacancy file is read-only' : 'Save current file changes'}
+                        disabled={fileLoading || fileSaving || !fileDirty || activeFilePath.endsWith('/vacancy.md')}
+                        onClick={() => void saveFile()}
+                      >
+                        {fileSaving ? 'Saving...' : activeFilePath.endsWith('/vacancy.md') ? 'Read only' : 'Save file'}
+                      </button>
+                    </div>
+                    {activeFilePath.endsWith('/vacancy.md') && (
+                      <p className="muted-mini">Vacancy files are read-only. Edit Notes, Cover, or CV in the editor instead.</p>
+                    )}
+                    {fileLoading ? (
+                      <p className="empty-state">Opening file...</p>
+                    ) : activeFileExt === 'md' || activeFileExt === 'tex' ? (
+                      <div className="editor-split">
+                        <textarea
+                          className="editor-area"
+                          readOnly={activeFilePath.endsWith('/vacancy.md')}
+                          value={fileDraft}
+                          onChange={(e) => {
+                            if (activeFilePath.endsWith('/vacancy.md')) return
+                            const next = e.target.value
+                            setFileDraft(next)
+                            setFileDirty(next !== fileContent)
+                          }}
+                        />
+                        <div className="preview-area" aria-label="Rendered preview">
+                          <div
+                            className="preview-content"
+                            dangerouslySetInnerHTML={{ __html: previewHtml }}
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <textarea
+                        className="editor-area"
+                        readOnly={activeFilePath.endsWith('/vacancy.md')}
+                        value={fileDraft}
+                        onChange={(e) => {
+                          if (activeFilePath.endsWith('/vacancy.md')) return
+                          const next = e.target.value
+                          setFileDraft(next)
+                          setFileDirty(next !== fileContent)
+                        }}
+                      />
+                    )}
+                  </>
+                ) : (
+                  <p className="empty-state">No file opened yet. Click Process on a tracker row.</p>
+                )}
+              </section>
+            </>
+          )}
         </>
       )}
+
     </div>
   )
 }
