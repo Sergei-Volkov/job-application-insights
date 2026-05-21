@@ -84,3 +84,5 @@ Discovery rerun behavior:
 | `DISCOVERY_SCRIPT_PATH` | `discovery/job_finder.py` | Discovery script location |
 | `DISCOVERY_CV_PATH` | _(empty)_ | Fallback CV path for discovery runs |
 | `APPLICATIONS_ROOT` | `applications` | Root for generated docs and file APIs |
+| `VACANCIES_TEMPLATE_DIR` | `vacancies/_template` | Template dir relative to `APPLICATIONS_ROOT` (or absolute path) |
+| `BASE_CV_TEMPLATE_PATH` | `resumes/CV.tex` | Base CV path relative to `APPLICATIONS_ROOT` (or absolute path) |

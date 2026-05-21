@@ -121,12 +121,26 @@ def applications_root() -> Path:
     return resolve_from_workspace_root(settings.applications_root)
 
 
+def resolve_from_applications_root(raw_path: str) -> Path:
+    path = Path(raw_path)
+    if path.is_absolute():
+        return path
+
+    normalized = raw_path.strip().replace("\\", "/")
+    root_norm = settings.applications_root.strip().replace("\\", "/").strip("/")
+    if root_norm and (normalized == root_norm or normalized.startswith(root_norm + "/")):
+        # Backward compatibility for existing workspace-relative values.
+        return resolve_from_workspace_root(raw_path)
+
+    return (applications_root() / path).resolve()
+
+
 def templates_root() -> Path:
-    return resolve_from_workspace_root(settings.vacancies_template_dir)
+    return resolve_from_applications_root(settings.vacancies_template_dir)
 
 
 def base_cv_template_path() -> Path:
-    return resolve_from_workspace_root(settings.base_cv_template_path)
+    return resolve_from_applications_root(settings.base_cv_template_path)
 
 
 def _is_within_path(path: Path, root: Path) -> bool:

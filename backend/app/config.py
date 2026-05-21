@@ -32,10 +32,12 @@ class Settings(BaseSettings):
     discovery_log_max_chars: int = 3000
     discovery_default_profile: str = "de"
 
-    # Workspace-relative paths used by document generation and file editing.
+    # Workspace-relative path root used by document generation and file editing.
     applications_root: str = "applications"
-    vacancies_template_dir: str = "applications/vacancies/_template"
-    base_cv_template_path: str = "applications/resumes/CV.tex"
+
+    # Relative paths under applications_root (or absolute paths when needed).
+    vacancies_template_dir: str = "vacancies/_template"
+    base_cv_template_path: str = "resumes/CV.tex"
 
     model_config = ConfigDict(
         env_file=".env",
