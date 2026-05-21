@@ -354,3 +354,31 @@ def test_path_and_helper_sanity() -> None:
     assert "output truncated" in truncated
     assert len(truncated) <= 80
     assert today_iso() == datetime.now().strftime("%Y-%m-%d")
+
+
+def test_run_discovery_failure_truncates_stderr() -> None:
+    _clear_db()
+
+    class Completed:
+        returncode = 1
+        stdout = "ok"
+        stderr = "Z" * 600
+
+    with patch("app.routers.discovery.subprocess.run", return_value=Completed()):
+        response = client.post(
+            "/run-discovery",
+            json={
+                "limit": 5,
+                "min_score": 1,
+                "max_age_days": 10,
+                "include_stretch": False,
+                "api_base_url": "http://127.0.0.1:8000",
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert "Discovery script failed with exit code 1" in detail
+    assert "output truncated" in detail
+    assert len(detail) <= 500
