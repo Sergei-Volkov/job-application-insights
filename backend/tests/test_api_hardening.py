@@ -129,7 +129,7 @@ def test_run_discovery_output_is_summarized() -> None:
         stdout = "A" * 600
         stderr = "B" * 600
 
-    with patch("app.main.subprocess.run", return_value=Completed()):
+    with patch("app.routers.discovery.subprocess.run", return_value=Completed()):
         response = client.post(
             "/run-discovery",
             json={"limit": 5, "min_score": 1, "max_age_days": 10, "include_stretch": False},
@@ -153,7 +153,7 @@ def test_run_discovery_forwards_profile_mode() -> None:
         stdout = "ok"
         stderr = ""
 
-    with patch("app.main.subprocess.run", return_value=Completed()) as mocked:
+    with patch("app.routers.discovery.subprocess.run", return_value=Completed()) as mocked:
         response = client.post(
             "/run-discovery",
             json={
