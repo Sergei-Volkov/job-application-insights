@@ -1,8 +1,6 @@
-from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import datetime
 import hashlib
-import hmac
 import os
 from pathlib import Path
 import re
@@ -10,16 +8,19 @@ import subprocess
 import sys
 from typing import Iterator
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import and_, func, inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .config import settings
+from .dependencies import get_db, require_write_access
 from .database import SessionLocal, engine
 from .init_db import init_db
 from .models import JobApplication
+from .routers.analytics import router as analytics_router
+from .routers.system import router as system_router
 from .schemas import (
     DiscoveryRunRequest,
     DiscoveryRunResult,
@@ -70,23 +71,8 @@ app.add_middleware(
     allow_headers=["Content-Type", "X-API-Key"],
 )
 
-
-def get_db() -> Iterator[Session]:
-    with SessionLocal() as db:
-        yield db
-
-
-def require_write_access(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -> None:
-    if not settings.require_write_key:
-        return
-    expected = settings.write_api_key.strip()
-    if not expected:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="X-API-Key is required but not configured. Set WRITE_API_KEY in .env.",
-        )
-    if not x_api_key or not hmac.compare_digest(x_api_key, expected):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing X-API-Key")
+app.include_router(system_router)
+app.include_router(analytics_router)
 
 
 def project_root() -> Path:
@@ -221,11 +207,6 @@ def find_existing_application(db: Session, company: str, role: str, link: str) -
         )
         .first()
     )
-
-
-@app.get("/health", tags=["system"], summary="Check API health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
 
 
 @app.get(
@@ -645,87 +626,3 @@ def run_discovery(payload: DiscoveryRunRequest, _: None = Depends(require_write_
     )
 
 
-@app.get(
-    "/stats",
-    response_model=StatsOut,
-    tags=["analytics"],
-    summary="Get top-level application metrics",
-)
-def stats(db: Session = Depends(get_db)) -> StatsOut:
-    total = db.query(func.count(JobApplication.id)).scalar() or 0
-
-    status_rows = (
-        db.query(
-            func.lower(func.coalesce(JobApplication.status, "unknown")).label("status"),
-            func.count(JobApplication.id).label("count"),
-        )
-        .group_by(func.lower(func.coalesce(JobApplication.status, "unknown")))
-        .all()
-    )
-    by_status = {row.status.strip(): row.count for row in status_rows}
-
-    stage_rows = (
-        db.query(
-            func.lower(func.coalesce(JobApplication.next_step, "unknown")).label("next_step"),
-            func.count(JobApplication.id).label("count"),
-        )
-        .group_by(func.lower(func.coalesce(JobApplication.next_step, "unknown")))
-        .all()
-    )
-    by_stage = {row.next_step.strip(): row.count for row in stage_rows}
-
-    return {
-        "total_applications": total,
-        "by_status": by_status,
-        "by_stage": by_stage,
-    }
-
-
-@app.get(
-    "/missing-skills",
-    response_model=SkillGapList,
-    tags=["analytics"],
-    summary="Extract missing skills from notes",
-)
-def missing_skills(db: Session = Depends(get_db)) -> SkillGapList:
-    marker = "missing or adjacent tools:"
-    found: list[str] = []
-
-    for (notes,) in db.query(JobApplication.notes).all():
-        text = (notes or "").strip()
-        lower = text.lower()
-        if marker not in lower:
-            continue
-
-        idx = lower.index(marker)
-        raw = text[idx + len(marker) :]
-        parts = [p.strip(" .") for p in raw.split(",") if p.strip()]
-        found.extend(parts)
-
-    if not found:
-        found = [s.strip() for s in settings.default_missing_skills.split(",") if s.strip()]
-
-    gap_counter = Counter(found)
-    ordered = [{"skill": k, "count": v} for k, v in gap_counter.most_common()]
-    return {"items": ordered}
-
-
-@app.get(
-    "/trend",
-    response_model=TrendList,
-    tags=["analytics"],
-    summary="Aggregate application discovery by ISO week",
-)
-def trend(db: Session = Depends(get_db)) -> TrendList:
-    week_counter: Counter = Counter()
-    for (date_str,) in db.query(JobApplication.date_found).filter(JobApplication.date_found != "").all():
-        date_str = (date_str or "").strip()
-        if not date_str:
-            continue
-        try:
-            week_counter[datetime.strptime(date_str, "%Y-%m-%d").strftime("%G-W%V")] += 1
-        except ValueError:
-            continue
-
-    items = [{"week": w, "count": c} for w, c in sorted(week_counter.items())]
-    return {"items": items}
