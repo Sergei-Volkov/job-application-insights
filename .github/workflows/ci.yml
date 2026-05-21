@@ -7,6 +7,20 @@ on:
   pull_request:
 
 jobs:
+  gitleaks:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: detect --source . --no-git --redact --exit-code 1
+
   backend:
     name: Backend Checks
     runs-on: ubuntu-latest
