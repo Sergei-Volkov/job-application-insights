@@ -28,56 +28,12 @@ import {
   type Stats,
   type TrendItem,
 } from './api'
+import { DISCOVERY_SOURCES, NEXT_STEP_CHIP_LABELS, NEXT_STEP_OPTIONS } from './appConstants'
+import type { AppPage, DiscoveryProfile, EditableRow, GeneratedDocsMap, ListingFilter } from './appTypes'
+import { getRowDocLinks } from './utils/docs'
+import { filterApplications, isNewListing, isUpdatedListing, normalizedProfile } from './utils/listing'
+import { renderMarkdownPreview, renderTexPreview } from './utils/preview'
 import './App.css'
-
-type EditableRow = ApplicationItem & {
-  saving?: boolean
-  generating?: boolean
-}
-
-type DiscoveryProfile = 'de' | 'swe' | 'other'
-
-type ListingFilter = 'all' | 'updated' | 'new'
-
-type GeneratedDocsMap = Record<number, GenerateDocumentsResult>
-
-type RowDocLinks = {
-  vacancyPath?: string
-  notesPath?: string
-  coverLetterPath?: string
-  cvPath?: string
-}
-
-type AppPage = 'pipeline' | 'analytics' | 'discovery'
-
-const DISCOVERY_SOURCES = [
-  { key: 'wwr', label: 'We Work Remotely' },
-  { key: 'working_nomads', label: 'Working Nomads' },
-  { key: 'remoteok', label: 'Remote OK' },
-  { key: 'remotive', label: 'Remotive' },
-  { key: 'arbeitnow', label: 'Arbeitnow' },
-  { key: 'jobicy', label: 'Jobicy' },
-] as const
-
-const NEXT_STEP_CHIP_LABELS: Record<string, string> = {
-  'Review role requirements': 'Review',
-  'Tailor CV': 'Tailor CV',
-  'Write cover letter': 'Cover Letter',
-  'Submit application': 'Submit',
-  'Prepare for interview': 'Interview Prep',
-  'Follow up with recruiter': 'Follow-up',
-  'Wait for response': 'Waiting',
-}
-
-const NEXT_STEP_OPTIONS = [
-  'Review role requirements',
-  'Tailor CV',
-  'Write cover letter',
-  'Submit application',
-  'Prepare for interview',
-  'Follow up with recruiter',
-  'Wait for response',
-]
 
 export default function App() {
   const [stats, setStats] = useState<Stats | null>(null)
@@ -133,21 +89,6 @@ export default function App() {
       .finally(() => setLoading(false))
   }
 
-  const normalizedProfile = (row: EditableRow): DiscoveryProfile => {
-    const value = (row.match_profile || '').trim().toLowerCase()
-    if (value === 'swe' || value === 'other') return value
-    return 'de'
-  }
-
-  const isUpdatedListing = (row: EditableRow) =>
-    (row.change_note || '').toLowerCase().includes('updated on')
-
-  const isNewListing = (row: EditableRow) => {
-    const first = (row.first_seen_at || '').trim()
-    const last = (row.last_seen_at || '').trim()
-    return !!first && first === last && !isUpdatedListing(row)
-  }
-
   useEffect(() => {
     localStorage.setItem('activePage', activePage)
   }, [activePage])
@@ -169,14 +110,7 @@ export default function App() {
   }, [])
 
   const analyticsFilteredApps = useMemo(() => {
-    return applications.filter((row) => {
-      const profileOk = analyticsProfileFilter === 'all' || normalizedProfile(row) === analyticsProfileFilter
-      const listingOk =
-        analyticsListingFilter === 'all' ||
-        (analyticsListingFilter === 'updated' && isUpdatedListing(row)) ||
-        (analyticsListingFilter === 'new' && isNewListing(row))
-      return profileOk && listingOk
-    })
+    return filterApplications(applications, analyticsProfileFilter, analyticsListingFilter)
   }, [applications, analyticsListingFilter, analyticsProfileFilter])
 
   const statusData = useMemo(() => {
@@ -250,14 +184,7 @@ export default function App() {
   }
 
   const filteredApplications = useMemo(() => {
-    return applications.filter((row) => {
-      const profileOk = profileFilter === 'all' || normalizedProfile(row) === profileFilter
-      const listingOk =
-        listingFilter === 'all' ||
-        (listingFilter === 'updated' && isUpdatedListing(row)) ||
-        (listingFilter === 'new' && isNewListing(row))
-      return profileOk && listingOk
-    })
+    return filterApplications(applications, profileFilter, listingFilter)
   }, [applications, listingFilter, profileFilter])
 
   const activeProcessRow = useMemo(
@@ -272,201 +199,11 @@ export default function App() {
     return ''
   }, [activeFilePath])
 
-  const escapeHtml = (value: string) =>
-    value
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;')
-
-  const renderMarkdownPreview = (source: string) => {
-    const lines = source.replace(/\r\n/g, '\n').split('\n')
-    const chunks: string[] = []
-    let inList = false
-    let inCode = false
-
-    for (const rawLine of lines) {
-      const line = rawLine
-
-      if (line.trim().startsWith('```')) {
-        if (inCode) {
-          chunks.push('</code></pre>')
-        } else {
-          chunks.push('<pre><code>')
-        }
-        inCode = !inCode
-        continue
-      }
-
-      if (inCode) {
-        chunks.push(`${escapeHtml(line)}\n`)
-        continue
-      }
-
-      const heading = line.match(/^(#{1,6})\s+(.*)$/)
-      if (heading) {
-        if (inList) {
-          chunks.push('</ul>')
-          inList = false
-        }
-        const level = heading[1].length
-        chunks.push(`<h${level}>${escapeHtml(heading[2])}</h${level}>`)
-        continue
-      }
-
-      const bullet = line.match(/^\s*[-*+]\s+(.*)$/)
-      if (bullet) {
-        if (!inList) {
-          chunks.push('<ul>')
-          inList = true
-        }
-        chunks.push(`<li>${escapeHtml(bullet[1])}</li>`)
-        continue
-      }
-
-      if (inList) {
-        chunks.push('</ul>')
-        inList = false
-      }
-
-      if (!line.trim()) {
-        chunks.push('<div class="preview-paragraph spacer"></div>')
-        continue
-      }
-
-      const inline = escapeHtml(line)
-        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        .replace(/__(.+?)__/g, '<strong>$1</strong>')
-        .replace(/(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)/g, '<em>$1</em>')
-        .replace(/_(.+?)_/g, '<em>$1</em>')
-        .replace(/`(.+?)`/g, '<code>$1</code>')
-        .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
-
-      chunks.push(`<p class="preview-paragraph">${inline}</p>`)
-    }
-
-    if (inList) chunks.push('</ul>')
-    if (inCode) chunks.push('</code></pre>')
-
-    return chunks.join('\n') || '<p class="preview-empty">No preview content.</p>'
-  }
-
-  const renderTexPreview = (source: string) => {
-    const normalized = source.replace(/\r\n/g, '\n')
-    const lines = normalized.split('\n')
-    const chunks: string[] = []
-    let inList = false
-
-    const flushList = () => {
-      if (inList) {
-        chunks.push('</ul>')
-        inList = false
-      }
-    }
-
-    for (const rawLine of lines) {
-      const line = rawLine.trim()
-      if (!line) {
-        flushList()
-        chunks.push('<div class="preview-paragraph spacer"></div>')
-        continue
-      }
-
-      const section = line.match(/^\\(sub)*section\{(.+?)\}/)
-      if (section) {
-        flushList()
-        const level = line.startsWith('\\subsection') ? 3 : 2
-        chunks.push(`<h${level}>${escapeHtml(section[2])}</h${level}>`)
-        continue
-      }
-
-      if (line.startsWith('\\begin{itemize}')) {
-        flushList()
-        chunks.push('<ul>')
-        inList = true
-        continue
-      }
-
-      if (line.startsWith('\\end{itemize}')) {
-        flushList()
-        continue
-      }
-
-      const item = line.match(/^\\item\s*(.*)$/)
-      if (item) {
-        if (!inList) {
-          chunks.push('<ul>')
-          inList = true
-        }
-        chunks.push(`<li>${escapeHtml(item[1])}</li>`)
-        continue
-      }
-
-      const cleaned = escapeHtml(line)
-        .replace(/\\textbf\{(.+?)\}/g, '<strong>$1</strong>')
-        .replace(/\\textit\{(.+?)\}/g, '<em>$1</em>')
-        .replace(/\\href\{(.+?)\}\{(.+?)\}/g, '<a href="$1" target="_blank" rel="noreferrer">$2</a>')
-        .replace(/\\[a-zA-Z]+\*?(?:\[[^\]]*\])?(?:\{[^}]*\})?/g, '')
-
-      chunks.push(`<p class="preview-paragraph">${cleaned}</p>`)
-    }
-
-    flushList()
-    return chunks.join('\n') || '<p class="preview-empty">No preview content.</p>'
-  }
-
   const previewHtml = useMemo(() => {
     if (activeFileExt === 'md') return renderMarkdownPreview(fileDraft)
     if (activeFileExt === 'tex') return renderTexPreview(fileDraft)
     return ''
   }, [activeFileExt, fileDraft])
-
-  const getRowDocLinks = (row: EditableRow): RowDocLinks => {
-    const generated = generatedDocsById[row.id]
-    if (generated) {
-      return {
-        vacancyPath: generated.vacancy_path,
-        notesPath: generated.notes_path,
-        coverLetterPath: generated.cover_letter_path,
-        cvPath: generated.cv_path,
-      }
-    }
-
-    const cover = (row.cover_letter_ref || '').replace(/\\/g, '/')
-    const cv = (row.resume_ref || '').replace(/\\/g, '/')
-    const candidate = cover || cv
-    if (!candidate) {
-      return {
-        coverLetterPath: cover || undefined,
-        cvPath: cv || undefined,
-      }
-    }
-
-    const coverSuffix = '/cover_letter.md'
-    const cvSuffix = '/cv.tex'
-    let baseDir = ''
-
-    if (candidate.endsWith(coverSuffix)) {
-      baseDir = candidate.slice(0, -coverSuffix.length)
-    } else if (candidate.endsWith(cvSuffix)) {
-      baseDir = candidate.slice(0, -cvSuffix.length)
-    }
-
-    if (!baseDir) {
-      return {
-        coverLetterPath: cover || undefined,
-        cvPath: cv || undefined,
-      }
-    }
-
-    return {
-      vacancyPath: `${baseDir}/vacancy.md`,
-      notesPath: `${baseDir}/notes.md`,
-      coverLetterPath: cover || `${baseDir}/cover_letter.md`,
-      cvPath: cv || `${baseDir}/cv.tex`,
-    }
-  }
 
   const saveRow = async (row: EditableRow) => {
     patchLocal(row.id, { saving: true })
@@ -510,7 +247,7 @@ export default function App() {
 
   const startProcessForRow = async (row: EditableRow) => {
     setActiveProcessId(row.id)
-    const rowDocs = getRowDocLinks(row)
+    const rowDocs = getRowDocLinks(row, generatedDocsById)
     const preferredPath =
       lastProcessFileById[row.id] || rowDocs.vacancyPath || rowDocs.notesPath || rowDocs.coverLetterPath || rowDocs.cvPath
 
@@ -1053,7 +790,7 @@ export default function App() {
                     </thead>
                     <tbody>
                       {filteredApplications.map((row) => {
-                        const rowDocs = getRowDocLinks(row)
+                        const rowDocs = getRowDocLinks(row, generatedDocsById)
                         return (
                           <tr key={row.id}>
                             <td>
@@ -1153,7 +890,7 @@ export default function App() {
                     <strong>{activeProcessRow.company} - {activeProcessRow.role}</strong>
                     <div className="docs-actions process-actions" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(110px, max-content))' }}>
                       {(() => {
-                        const docs = getRowDocLinks(activeProcessRow)
+                        const docs = getRowDocLinks(activeProcessRow, generatedDocsById)
                         const hasAnyDocs = !!(docs.vacancyPath || docs.notesPath || docs.coverLetterPath || docs.cvPath)
                         return (
                           <>
@@ -1186,7 +923,7 @@ export default function App() {
                         )
                       })()}
                       {!(() => {
-                        const docs = getRowDocLinks(activeProcessRow)
+                        const docs = getRowDocLinks(activeProcessRow, generatedDocsById)
                         return !!(activeProcessRow.resume_ref || activeProcessRow.cover_letter_ref || docs.vacancyPath || docs.notesPath)
                       })() ? (
                         <button
