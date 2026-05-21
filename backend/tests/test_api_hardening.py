@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from pathlib import Path
 import shutil
 import sys
@@ -44,8 +45,15 @@ os.environ["VACANCIES_TEMPLATE_DIR"] = str(_TEMPLATE_DIR)
 os.environ["BASE_CV_TEMPLATE_PATH"] = str(_RESUMES_DIR / "CV.tex")
 
 from app.database import Base, SessionLocal, engine  # noqa: E402
+from app.helpers import slugify, summarize_process_output, today_iso  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import JobApplication  # noqa: E402
+from app.pathing import (  # noqa: E402
+    applications_root,
+    is_within_path,
+    resolve_from_applications_root,
+    safe_relative_path,
+)
 
 Base.metadata.create_all(bind=engine)
 
@@ -271,3 +279,78 @@ def test_generate_documents_overwrite_flow() -> None:
         assert "Northwind" in content
     finally:
         cover_template.write_text(original_template, encoding="utf-8")
+
+
+def test_health_and_stats_endpoints() -> None:
+    _clear_db()
+
+    health = client.get("/health")
+    assert health.status_code == 200
+    assert health.json() == {"status": "ok"}
+
+    first = client.post(
+        "/applications/upsert",
+        json=_base_payload(
+            company="Northwind",
+            role="Data Engineer",
+            link="https://example.com/job/stats-1",
+            status="Applied",
+            next_step="Interview",
+        ),
+        headers=_auth_headers(),
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        "/applications/upsert",
+        json=_base_payload(
+            company="Blue Harbor",
+            role="Backend Engineer",
+            link="https://example.com/job/stats-2",
+            status="To Review",
+            next_step="Screening",
+        ),
+        headers=_auth_headers(),
+    )
+    assert second.status_code == 200
+
+    stats = client.get("/stats")
+    assert stats.status_code == 200
+    data = stats.json()
+
+    assert data["total_applications"] == 2
+    assert data["by_status"]["applied"] == 1
+    assert data["by_status"]["to review"] == 1
+    assert data["by_stage"]["interview"] == 1
+    assert data["by_stage"]["screening"] == 1
+
+
+def test_startup_bootstraps_missing_schema() -> None:
+    class FakeInspector:
+        def has_table(self, table_name: str) -> bool:
+            return False
+
+    with patch("app.main.inspect", return_value=FakeInspector()) as mocked_inspect, patch(
+        "app.main.init_db"
+    ) as mocked_init_db:
+        with TestClient(app) as fresh_client:
+            response = fresh_client.get("/health")
+
+    assert response.status_code == 200
+    mocked_inspect.assert_called_once()
+    mocked_init_db.assert_called_once()
+
+
+def test_path_and_helper_sanity() -> None:
+    assert applications_root() == _APPLICATIONS_ROOT
+    assert resolve_from_applications_root("vacancies/_template") == _TEMPLATE_DIR
+    assert is_within_path(_TEMPLATE_DIR, _APPLICATIONS_ROOT)
+    assert safe_relative_path(_TEMPLATE_DIR, _APPLICATIONS_ROOT) == "vacancies/_template"
+
+    assert slugify("  Foo bar!!  ") == "foo_bar"
+    assert summarize_process_output("abc", 10) == "abc"
+
+    truncated = summarize_process_output("A" * 600, 80)
+    assert "output truncated" in truncated
+    assert len(truncated) <= 80
+    assert today_iso() == datetime.now().strftime("%Y-%m-%d")
