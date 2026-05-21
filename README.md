@@ -22,7 +22,6 @@ docker compose up --build
 Notes:
 - The API initializes schema automatically only when the database/tables are missing.
 - Manual initialization is still available: `cd backend && python -m app.init_db`.
-- Data import is explicit via `POST /sync-from-csv`.
 - `applications/` is mounted into the backend container for tracker and document files.
 
 ## Run locally
@@ -46,7 +45,6 @@ npm run dev
 - `GET /applications`
 - `POST /applications/upsert`
 - `PATCH /applications/{id}`
-- `POST /sync-from-csv`
 - `POST /run-discovery`
 - `POST /applications/{id}/generate-documents`
 - `GET /workspace-file`
@@ -77,7 +75,6 @@ Discovery rerun behavior:
 | Variable | Default | Purpose |
 |---|---|---|
 | `DATABASE_URL` | `sqlite:///./app.db` | SQLAlchemy connection string |
-| `CSV_PATH` | `applications/tracker/job_applications.csv` | CSV imported by `/sync-from-csv` |
 | `CORS_ORIGINS` | `[...]` | Allowed frontend origins |
 | `WRITE_API_KEY` | _(empty)_ | Optional key for write endpoints |
 | `REQUIRE_WRITE_KEY` | `false` | Require `X-API-Key` when true |

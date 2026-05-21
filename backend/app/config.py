@@ -6,9 +6,6 @@ class Settings(BaseSettings):
     # Database connection string.
     database_url: str = "sqlite:///./app.db"
 
-    # CSV used by /sync-from-csv.
-    csv_path: str = "applications/tracker/job_applications.csv"
-
     # Fallback skill list used when notes contain no gap markers.
     default_missing_skills: str = "Kubernetes,Redis,GraphQL,Cypress,Terraform,CI/CD"
 

@@ -12,17 +12,12 @@ if str(_BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(_BACKEND_ROOT))
 
 _TMP_DIR.mkdir(parents=True, exist_ok=True)
-_SEED_CSV = _TMP_DIR / "seed.csv"
 _CV_PATH = _TMP_DIR / "cv.tex"
 _DB_PATH = _TMP_DIR / "test.db"
 _APPLICATIONS_ROOT = _TMP_DIR / "applications"
 _TEMPLATE_DIR = _APPLICATIONS_ROOT / "vacancies" / "_template"
 _RESUMES_DIR = _APPLICATIONS_ROOT / "resumes"
 
-_SEED_CSV.write_text(
-    "selected,date_found,date_applied,company,role,location,source,remote_type,fit,fit_score,link,status,next_step,follow_up_date,notes\n",
-    encoding="utf-8",
-)
 _CV_PATH.write_text("Python SQL FastAPI", encoding="utf-8")
 _TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)
 _RESUMES_DIR.mkdir(parents=True, exist_ok=True)
@@ -40,7 +35,6 @@ if _DB_PATH.exists():
     _DB_PATH.unlink()
 
 os.environ["DATABASE_URL"] = f"sqlite:///{_DB_PATH.as_posix()}"
-os.environ["CSV_PATH"] = str(_SEED_CSV)
 os.environ["DISCOVERY_CV_PATH"] = str(_CV_PATH)
 os.environ["WRITE_API_KEY"] = "test-key"
 os.environ["REQUIRE_WRITE_KEY"] = "true"
@@ -77,14 +71,6 @@ def _clear_db() -> None:
     with SessionLocal() as db:
         db.query(JobApplication).delete()
         db.commit()
-
-
-def _write_seed_rows(rows: list[str]) -> None:
-    header = "selected,date_found,date_applied,company,role,location,source,remote_type,fit,fit_score,link,status,next_step,follow_up_date,notes\n"
-    body = "\n".join(rows)
-    if body:
-        body += "\n"
-    _SEED_CSV.write_text(header + body, encoding="utf-8")
 
 
 def test_write_endpoints_require_api_key() -> None:
@@ -157,23 +143,6 @@ def test_run_discovery_output_is_summarized() -> None:
     assert "output truncated" in data["stderr"]
     assert len(data["stdout"]) <= 80
     assert len(data["stderr"]) <= 80
-
-
-def test_sync_from_csv_is_idempotent() -> None:
-    _clear_db()
-    _write_seed_rows(
-        [
-            "no,2026-04-11,,Northwind Labs,Backend Engineer,Remote,Example Board,Remote,Strong,17,https://example.com/jobs/sync-1,To review,Review role requirements,,note"
-        ]
-    )
-
-    first = client.post("/sync-from-csv", headers=_auth_headers())
-    assert first.status_code == 200
-    assert first.json() == {"added": 1, "updated": 0}
-
-    second = client.post("/sync-from-csv", headers=_auth_headers())
-    assert second.status_code == 200
-    assert second.json() == {"added": 0, "updated": 1}
 
 
 def test_run_discovery_forwards_profile_mode() -> None:

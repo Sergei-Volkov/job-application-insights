@@ -1,6 +1,5 @@
 from collections import Counter
 from contextlib import asynccontextmanager
-import csv
 from datetime import datetime
 import hashlib
 import hmac
@@ -31,7 +30,6 @@ from .schemas import (
     JobApplicationUpsert,
     SkillGapList,
     StatsOut,
-    SyncResult,
     TrendList,
     WorkspaceFileReadResult,
     WorkspaceFileWriteRequest,
@@ -89,10 +87,6 @@ def require_write_access(x_api_key: str | None = Header(default=None, alias="X-A
         )
     if not x_api_key or not hmac.compare_digest(x_api_key, expected):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing X-API-Key")
-
-
-def tracker_path() -> Path:
-    return resolve_from_project_root(settings.csv_path)
 
 
 def project_root() -> Path:
@@ -206,13 +200,6 @@ def _render_vacancy_notes(template_text: str, record: JobApplication) -> str:
     )
 
 
-def _to_int(value: str | None) -> int:
-    try:
-        return int((value or "0").strip())
-    except ValueError:
-        return 0
-
-
 def _normalize_key(value: str | None) -> str:
     return (value or "").strip().lower()
 
@@ -234,97 +221,6 @@ def find_existing_application(db: Session, company: str, role: str, link: str) -
         )
         .first()
     )
-
-
-def sync_from_csv(db: Session) -> dict[str, int]:
-    path = tracker_path()
-    if not path.exists():
-        return {"added": 0, "updated": 0}
-
-    # Prefetch existing rows once to avoid per-row queries.
-    existing_by_link: dict[str, JobApplication] = {}
-    existing_by_company_role: dict[tuple[str, str], JobApplication] = {}
-    for app in db.query(JobApplication).all():
-        if app.link:
-            existing_by_link[app.link] = app
-        company_key = _normalize_key(app.company)
-        role_key = _normalize_key(app.role)
-        if company_key and role_key:
-            existing_by_company_role[(company_key, role_key)] = app
-
-    added = 0
-    updated = 0
-    with path.open("r", encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            link = (row.get("link") or "").strip()
-            company = (row.get("company") or "").strip()
-            role = (row.get("role") or "").strip()
-
-            existing = None
-            if link and link in existing_by_link:
-                existing = existing_by_link[link]
-            elif company and role:
-                company_key = _normalize_key(company)
-                role_key = _normalize_key(role)
-                existing = existing_by_company_role.get((company_key, role_key))
-
-            if existing is None:
-                new_app = JobApplication(
-                    selected=(row.get("selected") or "no"),
-                    date_found=(row.get("date_found") or ""),
-                    date_applied=(row.get("date_applied") or ""),
-                    company=company,
-                    role=role,
-                    location=(row.get("location") or ""),
-                    source=(row.get("source") or ""),
-                    remote_type=(row.get("remote_type") or ""),
-                    fit=(row.get("fit") or ""),
-                    fit_score=_to_int(row.get("fit_score")),
-                    link=link,
-                    status=(row.get("status") or ""),
-                    next_step=(row.get("next_step") or ""),
-                    follow_up_date=(row.get("follow_up_date") or ""),
-                    resume_ref="",
-                    cover_letter_ref="",
-                    match_profile="",
-                    first_seen_at="",
-                    last_seen_at="",
-                    listing_fingerprint="",
-                    change_note="",
-                    notes=(row.get("notes") or ""),
-                )
-                db.add(new_app)
-                if link:
-                    existing_by_link[link] = new_app
-                company_key = _normalize_key(company)
-                role_key = _normalize_key(role)
-                if company_key and role_key:
-                    existing_by_company_role[(company_key, role_key)] = new_app
-                added += 1
-                continue
-
-            existing.selected = row.get("selected") or existing.selected or "no"
-            existing.date_found = row.get("date_found") or existing.date_found or ""
-            existing.date_applied = row.get("date_applied") or existing.date_applied or ""
-            existing.company = company or existing.company
-            existing.role = role or existing.role
-            existing.location = row.get("location") or existing.location or ""
-            existing.source = row.get("source") or existing.source or ""
-            existing.remote_type = row.get("remote_type") or existing.remote_type or ""
-            existing.fit = row.get("fit") or existing.fit or ""
-            existing.fit_score = (
-                _to_int(row.get("fit_score")) if row.get("fit_score", "").strip() else existing.fit_score
-            )
-            existing.link = link or existing.link
-            existing.status = row.get("status") or existing.status or ""
-            existing.next_step = row.get("next_step") or existing.next_step or ""
-            existing.follow_up_date = row.get("follow_up_date") or existing.follow_up_date or ""
-            existing.notes = row.get("notes") or existing.notes or ""
-            updated += 1
-
-    db.commit()
-    return {"added": added, "updated": updated}
 
 
 @app.get("/health", tags=["system"], summary="Check API health")
@@ -505,19 +401,6 @@ def patch_application(
     db.commit()
     db.refresh(record)
     return record
-
-
-@app.post(
-    "/sync-from-csv",
-    response_model=SyncResult,
-    tags=["imports"],
-    summary="Import or refresh rows from CSV",
-)
-def sync_from_csv_endpoint(
-    db: Session = Depends(get_db),
-    _: None = Depends(require_write_access),
-) -> SyncResult:
-    return sync_from_csv(db)
 
 
 def _resolve_workspace_file_path(raw_path: str) -> Path:

@@ -70,11 +70,6 @@ class JobApplicationUpsert(BaseModel):
     notes: str = ""
 
 
-class SyncResult(BaseModel):
-    added: int
-    updated: int
-
-
 class SkillGapItem(BaseModel):
     skill: str
     count: int

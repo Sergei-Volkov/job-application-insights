@@ -9,7 +9,6 @@ services:
       - ../applications:/app/applications
     environment:
       DATABASE_URL: sqlite:///./app.db
-      CSV_PATH: /app/applications/tracker/job_applications.csv
       DISCOVERY_SCRIPT_PATH: /app/discovery/job_finder.py
       DISCOVERY_CV_PATH: /app/applications/resumes/CV.tex
     env_file:
