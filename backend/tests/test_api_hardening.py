@@ -175,6 +175,10 @@ def test_run_discovery_forwards_profile_mode() -> None:
                 "salary_min_usd": 120000,
                 "timezones": ["UTC", "CET"],
                 "seniority": "senior",
+                "use_outcome_priors": True,
+                "prior_lookback_days": 180,
+                "source_prior_weight": 1.4,
+                "role_prior_weight": 0.9,
             },
             headers=_auth_headers(),
         )
@@ -192,6 +196,13 @@ def test_run_discovery_forwards_profile_mode() -> None:
     assert "UTC,CET" in command
     assert "--seniority" in command
     assert "senior" in command
+    assert "--use-outcome-priors" in command
+    assert "--prior-lookback-days" in command
+    assert "180" in command
+    assert "--source-prior-weight" in command
+    assert "1.4" in command
+    assert "--role-prior-weight" in command
+    assert "0.9" in command
 
 
 def test_generate_documents_and_workspace_file_editing() -> None:

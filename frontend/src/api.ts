@@ -128,6 +128,10 @@ export interface DiscoveryRunPayload {
   salary_min_usd?: number
   timezones?: string[]
   seniority?: 'junior' | 'mid' | 'senior'
+  use_outcome_priors?: boolean
+  prior_lookback_days?: number
+  source_prior_weight?: number
+  role_prior_weight?: number
   cv_path?: string
   api_base_url?: string
   verbose?: boolean

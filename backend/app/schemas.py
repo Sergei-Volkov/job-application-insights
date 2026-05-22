@@ -103,6 +103,10 @@ class DiscoveryRunRequest(BaseModel):
     salary_min_usd: int | None = None
     timezones: list[str] | None = None
     seniority: str | None = None
+    use_outcome_priors: bool = False
+    prior_lookback_days: int = 365
+    source_prior_weight: float = 1.0
+    role_prior_weight: float = 1.0
     cv_path: str | None = None
     api_base_url: str | None = None
     verbose: bool = False

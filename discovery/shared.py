@@ -176,6 +176,12 @@ class ApiUpsertFailure:
     message: str
 
 
+@dataclass
+class OutcomePriors:
+    source: dict[str, float]
+    role_family: dict[str, float]
+
+
 TRANSIENT_HTTP_CODES = {408, 425, 429, 500, 502, 503, 504}
 
 
@@ -189,6 +195,23 @@ def classify_upsert_exception(exc: Exception) -> tuple[int | None, str, bool]:
     if isinstance(exc, TimeoutError):
         return None, "TimeoutError", True
     return None, type(exc).__name__, False
+
+
+def fetch_json(
+    url: str,
+    timeout: int = 25,
+    extra_headers: dict[str, str] | None = None,
+) -> object:
+    headers: dict[str, str] = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json",
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+    request = Request(url, headers=headers)
+    context = ssl.create_default_context()
+    with urlopen(request, timeout=timeout, context=context) as response:
+        return json.loads(response.read().decode("utf-8", errors="ignore"))
 
 
 def fetch_text(url: str, timeout: int = 25) -> str:
@@ -616,3 +639,109 @@ def build_job_match(
         missing_skills=missing_skills,
         fit_notes=fit_notes,
     )
+
+
+def classify_role_family(title: str) -> str:
+    lower = title.lower()
+    if any(token in lower for token in ["data engineer", "etl", "pipeline", "warehouse"]):
+        return "data_engineering"
+    if "analytics engineer" in lower:
+        return "analytics_engineering"
+    if any(token in lower for token in ["backend", "software engineer", "api", "services"]):
+        return "backend"
+    if any(token in lower for token in ["platform", "infrastructure", "devops", "sre"]):
+        return "platform"
+    return "other"
+
+
+def status_outcome_weight(status: str) -> float:
+    lower = status.strip().lower()
+    if "offer" in lower:
+        return 3.0
+    if "interview" in lower:
+        return 2.0
+    if "applied" in lower:
+        return 1.0
+    if "rejected" in lower:
+        return -2.0
+    return 0.0
+
+
+def build_outcome_priors(
+    rows: list[dict[str, object]],
+    lookback_days: int = 365,
+    min_samples: int = 3,
+) -> OutcomePriors:
+    now = datetime.now()
+    source_scores: dict[str, list[float]] = {}
+    role_scores: dict[str, list[float]] = {}
+
+    for row in rows:
+        date_found = normalize(row.get("date_found"))
+        age = days_old(date_found)
+        if age is not None and age > max(lookback_days, 1):
+            continue
+
+        status = normalize(row.get("status"))
+        weight = status_outcome_weight(status)
+        if weight == 0:
+            continue
+
+        source_key = normalize(row.get("source")).lower()
+        role = normalize(row.get("role"))
+        role_family = classify_role_family(role)
+
+        if source_key:
+            source_scores.setdefault(source_key, []).append(weight)
+        role_scores.setdefault(role_family, []).append(weight)
+
+    def summarize(scores: dict[str, list[float]]) -> dict[str, float]:
+        out: dict[str, float] = {}
+        for key, values in scores.items():
+            if len(values) < min_samples:
+                continue
+            avg = sum(values) / len(values)
+            out[key] = max(-2.0, min(2.0, avg))
+        return out
+
+    return OutcomePriors(
+        source=summarize(source_scores),
+        role_family=summarize(role_scores),
+    )
+
+
+def apply_outcome_priors(
+    matches: list[JobMatch],
+    priors: OutcomePriors,
+    source_weight: float,
+    role_weight: float,
+) -> list[JobMatch]:
+    adjusted: list[JobMatch] = []
+    for item in matches:
+        source_key = item.source.strip().lower()
+        role_family = classify_role_family(item.title)
+        source_bonus = priors.source.get(source_key, 0.0)
+        role_bonus = priors.role_family.get(role_family, 0.0)
+        delta = source_bonus * source_weight + role_bonus * role_weight
+        if delta == 0:
+            adjusted.append(item)
+            continue
+        bumped = int(round(delta))
+        new_score = max(0, item.score + bumped)
+        adjusted.append(
+            JobMatch(
+                title=item.title,
+                company=item.company,
+                source=item.source,
+                remote_policy=item.remote_policy,
+                freshness=item.freshness,
+                fit=fit_label(new_score),
+                score=new_score,
+                url=item.url,
+                details_text=item.details_text,
+                matched_keywords=item.matched_keywords,
+                missing_skills=item.missing_skills,
+                fit_notes=item.fit_notes,
+            )
+        )
+    return adjusted

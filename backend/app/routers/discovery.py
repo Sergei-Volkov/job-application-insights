@@ -89,6 +89,11 @@ def run_discovery(payload: DiscoveryRunRequest, _: None = Depends(require_write_
         timezone_tokens = [tz.strip() for tz in payload.timezones if tz and tz.strip()]
         if timezone_tokens:
             command.extend(["--timezones", ",".join(timezone_tokens)])
+    if payload.use_outcome_priors:
+        command.append("--use-outcome-priors")
+        command.extend(["--prior-lookback-days", str(payload.prior_lookback_days)])
+        command.extend(["--source-prior-weight", str(payload.source_prior_weight)])
+        command.extend(["--role-prior-weight", str(payload.role_prior_weight)])
     if payload.sources:
         selected_sources = [src.strip().lower() for src in payload.sources if src and src.strip()]
         if selected_sources:

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import outputs
 import shared
-from shared import DEFAULT_API_BASE_URL, DEFAULT_API_WRITE_KEY
+from shared import DEFAULT_API_BASE_URL, DEFAULT_API_WRITE_KEY, OutcomePriors
 from sources import collect_matches
 
 APP_ROOT = Path(__file__).resolve().parents[1]
@@ -69,6 +69,29 @@ def main() -> int:
         default=None,
         help="Minimum seniority level to include.",
     )
+    parser.add_argument(
+        "--use-outcome-priors",
+        action="store_true",
+        help="Re-rank matches based on historical source/role outcome performance.",
+    )
+    parser.add_argument(
+        "--prior-lookback-days",
+        type=int,
+        default=365,
+        help="How many days of historical applications to use when building priors.",
+    )
+    parser.add_argument(
+        "--source-prior-weight",
+        type=float,
+        default=1.0,
+        help="Weight multiplier for source-level outcome prior.",
+    )
+    parser.add_argument(
+        "--role-prior-weight",
+        type=float,
+        default=1.0,
+        help="Weight multiplier for role-family outcome prior.",
+    )
     args = parser.parse_args()
 
     if args.output_dir:
@@ -98,6 +121,22 @@ def main() -> int:
     if not requested_sources:
         requested_sources = shared.SOURCE_OPTIONS.copy()
 
+    priors = OutcomePriors(source={}, role_family={})
+    if args.use_outcome_priors:
+        try:
+            headers: dict[str, str] = {}
+            if DEFAULT_API_WRITE_KEY:
+                headers["X-API-Key"] = DEFAULT_API_WRITE_KEY
+            payload = shared.fetch_json(
+                args.api_base_url.rstrip("/") + "/applications?limit=1000",
+                extra_headers=headers,
+            )
+            if isinstance(payload, list):
+                rows = [row for row in payload if isinstance(row, dict)]
+                priors = shared.build_outcome_priors(rows, lookback_days=args.prior_lookback_days)
+        except Exception as exc:
+            print(f"Warning: unable to load outcome priors: {exc}")
+
     broad_matches, collection_report = collect_matches(
         limit=max(args.limit * 3, 120),
         min_score=1,
@@ -108,6 +147,17 @@ def main() -> int:
         seniority=args.seniority,
         sources=requested_sources,
     )
+    if args.use_outcome_priors and (priors.source or priors.role_family):
+        broad_matches = shared.apply_outcome_priors(
+            broad_matches,
+            priors,
+            source_weight=args.source_prior_weight,
+            role_weight=args.role_prior_weight,
+        )
+        broad_matches = sorted(
+            broad_matches,
+            key=lambda row: (-row.score, row.freshness, row.title.lower()),
+        )
     strict_matches = [
         item
         for item in broad_matches
