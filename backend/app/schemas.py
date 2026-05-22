@@ -100,6 +100,9 @@ class DiscoveryRunRequest(BaseModel):
     max_age_days: int = 45
     include_stretch: bool = False
     profile: str = "de"
+    salary_min_usd: int | None = None
+    timezones: list[str] | None = None
+    seniority: str | None = None
     cv_path: str | None = None
     api_base_url: str | None = None
     verbose: bool = False

@@ -68,6 +68,9 @@ def write_table(path: Path, title: str, matches: list[JobMatch], report: Collect
             fh.write(f"- Filtered by age: {report.filtered_age}\n")
             fh.write(f"- Filtered by score: {report.filtered_score}\n")
             fh.write(f"- Filtered stretch roles: {report.filtered_stretch}\n")
+            fh.write(f"- Filtered by salary: {report.filtered_salary}\n")
+            fh.write(f"- Filtered by timezone: {report.filtered_timezone}\n")
+            fh.write(f"- Filtered by seniority: {report.filtered_seniority}\n")
             fh.write(f"- Dedup collisions: {report.dedup_collisions}\n")
             fh.write(f"- Unique listings after dedup: {report.deduped_total}\n")
     return path
@@ -101,7 +104,21 @@ def write_outputs(
         )
         writer.writeheader()
         for item in broad_matches:
-            writer.writerow(item.__dict__)
+            writer.writerow(
+                {
+                    "title": item.title,
+                    "company": item.company,
+                    "source": item.source,
+                    "remote_policy": item.remote_policy,
+                    "freshness": item.freshness,
+                    "fit": item.fit,
+                    "score": item.score,
+                    "matched_keywords": item.matched_keywords,
+                    "missing_skills": item.missing_skills,
+                    "fit_notes": item.fit_notes,
+                    "url": item.url,
+                }
+            )
 
     write_table(strict_md_path, "Latest Job Matches - Strict Shortlist", strict_matches, report)
     write_table(broad_md_path, "Broad Job Discovery List", broad_matches, report)
@@ -178,6 +195,7 @@ def sync_application_api(
     matches: list[JobMatch],
     api_base_url: str,
     api_key: str = "",
+    match_profile: str = "de",
     max_attempts: int = 3,
     base_backoff_seconds: float = 0.5,
 ) -> tuple[int, list[ApiUpsertFailure]]:
@@ -207,7 +225,7 @@ def sync_application_api(
             "follow_up_date": "",
             "resume_ref": "",
             "cover_letter_ref": "",
-            "match_profile": "de",
+            "match_profile": match_profile,
             "first_seen_at": today,
             "last_seen_at": today,
             "listing_fingerprint": hashlib.sha256(

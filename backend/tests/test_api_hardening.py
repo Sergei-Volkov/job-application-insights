@@ -172,6 +172,9 @@ def test_run_discovery_forwards_profile_mode() -> None:
                 "profile": "swe",
                 "api_base_url": "http://127.0.0.1:8000",
                 "verbose": True,
+                "salary_min_usd": 120000,
+                "timezones": ["UTC", "CET"],
+                "seniority": "senior",
             },
             headers=_auth_headers(),
         )
@@ -183,6 +186,12 @@ def test_run_discovery_forwards_profile_mode() -> None:
     assert "--api-base-url" in command
     assert "http://127.0.0.1:8000" in command
     assert "--verbose" in command
+    assert "--salary-min-usd" in command
+    assert "120000" in command
+    assert "--timezones" in command
+    assert "UTC,CET" in command
+    assert "--seniority" in command
+    assert "senior" in command
 
 
 def test_generate_documents_and_workspace_file_editing() -> None:

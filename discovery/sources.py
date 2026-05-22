@@ -22,6 +22,9 @@ from shared import (
     fit_label,
     infer_search_terms_for_profile,
     is_relevant,
+    matches_salary_requirement,
+    matches_seniority,
+    matches_timezone,
     normalize,
     normalize_url,
     parse_date,
@@ -251,6 +254,9 @@ def collect_matches(
     min_score: int,
     max_age_days: int,
     include_stretch: bool,
+    salary_min_usd: int | None = None,
+    allowed_timezones: list[str] | None = None,
+    seniority: str | None = None,
     sources: list[str] | None = None,
 ) -> tuple[list[JobMatch], CollectionReport]:
     requested_sources = [source for source in (sources or SOURCE_OPTIONS) if source in SOURCE_OPTIONS]
@@ -260,9 +266,13 @@ def collect_matches(
     filtered_age = 0
     filtered_score = 0
     filtered_stretch = 0
+    filtered_salary = 0
+    filtered_timezone = 0
+    filtered_seniority = 0
     dedup_collisions = 0
 
     for item in combined:
+        details = item.details_text
         age = days_old(item.freshness)
         if age is not None and age > max_age_days:
             filtered_age += 1
@@ -272,6 +282,15 @@ def collect_matches(
             continue
         if not include_stretch and item.fit == "Stretch":
             filtered_stretch += 1
+            continue
+        if not matches_salary_requirement(item.title, details, salary_min_usd):
+            filtered_salary += 1
+            continue
+        if not matches_timezone(item.remote_policy, details, allowed_timezones):
+            filtered_timezone += 1
+            continue
+        if not matches_seniority(item.title, details, seniority):
+            filtered_seniority += 1
             continue
 
         normalized_link = normalize_url(item.url)
@@ -295,6 +314,9 @@ def collect_matches(
         filtered_age=filtered_age,
         filtered_score=filtered_score,
         filtered_stretch=filtered_stretch,
+        filtered_salary=filtered_salary,
+        filtered_timezone=filtered_timezone,
+        filtered_seniority=filtered_seniority,
         dedup_collisions=dedup_collisions,
         deduped_total=len(deduped),
     )

@@ -131,6 +131,7 @@ class JobMatch:
     fit: str
     score: int
     url: str
+    details_text: str
     matched_keywords: str
     missing_skills: str
     fit_notes: str
@@ -158,6 +159,9 @@ class CollectionReport:
     filtered_age: int
     filtered_score: int
     filtered_stretch: int
+    filtered_salary: int
+    filtered_timezone: int
+    filtered_seniority: int
     dedup_collisions: int
     deduped_total: int
 
@@ -450,6 +454,78 @@ def parse_remote_policy(text: str) -> str:
     return "Not stated"
 
 
+SENIORITY_LEVELS = {
+    "junior": 1,
+    "mid": 2,
+    "senior": 3,
+    "lead": 4,
+    "staff": 5,
+}
+
+
+def infer_seniority(title: str, details: str) -> str:
+    text = f"{title} {details}".lower()
+    if any(token in text for token in ["staff", "principal"]):
+        return "staff"
+    if "lead" in text:
+        return "lead"
+    if any(token in text for token in ["senior", "sr.", "sr "]):
+        return "senior"
+    if any(token in text for token in ["junior", "jr.", "jr ", "entry level", "intern"]):
+        return "junior"
+    return "mid"
+
+
+def matches_seniority(title: str, details: str, requested: str | None) -> bool:
+    if not requested:
+        return True
+    req = requested.strip().lower()
+    if req not in {"junior", "mid", "senior"}:
+        return True
+    detected = infer_seniority(title, details)
+    return SENIORITY_LEVELS[detected] >= SENIORITY_LEVELS[req]
+
+
+def extract_salary_ceiling_usd(text: str) -> int | None:
+    lower = text.lower()
+    if not any(token in lower for token in ["$", "usd", "salary", "compensation", "pay", "rate"]):
+        return None
+
+    amounts: list[int] = []
+    for match in re.finditer(r"(\d{2,3})(\s?)(k)\b", lower):
+        amounts.append(int(match.group(1)) * 1000)
+
+    for match in re.finditer(r"\b(\d{4,6})\b", lower):
+        value = int(match.group(1))
+        if 10_000 <= value <= 1_000_000:
+            amounts.append(value)
+
+    if not amounts:
+        return None
+    return max(amounts)
+
+
+def matches_salary_requirement(title: str, details: str, minimum_usd: int | None) -> bool:
+    if minimum_usd is None or minimum_usd <= 0:
+        return True
+    ceiling = extract_salary_ceiling_usd(f"{title} {details}")
+    if ceiling is None:
+        return True
+    return ceiling >= minimum_usd
+
+
+def matches_timezone(remote_policy: str, details: str, allowed_timezones: list[str] | None) -> bool:
+    if not allowed_timezones:
+        return True
+    text = f"{remote_policy} {details}".lower()
+    normalized_allowed = [tz.strip().lower() for tz in allowed_timezones if tz and tz.strip()]
+    if not normalized_allowed:
+        return True
+    if any(token in text for token in normalized_allowed):
+        return True
+    return "remote" in text and "only" not in text
+
+
 def extract_keywords(text: str) -> tuple[list[str], list[str]]:
     lower = text.lower()
     owned: list[str] = []
@@ -535,6 +611,7 @@ def build_job_match(
         fit=fit_label(score),
         score=score,
         url=url,
+        details_text=normalize(details),
         matched_keywords=matched_keywords,
         missing_skills=missing_skills,
         fit_notes=fit_notes,

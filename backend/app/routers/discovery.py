@@ -51,6 +51,10 @@ def run_discovery(payload: DiscoveryRunRequest, _: None = Depends(require_write_
     if profile not in {"de", "swe", "other"}:
         raise HTTPException(status_code=400, detail="profile must be one of: de, swe, other")
 
+    seniority = (payload.seniority or "").strip().lower()
+    if seniority and seniority not in {"junior", "mid", "senior"}:
+        raise HTTPException(status_code=400, detail="seniority must be one of: junior, mid, senior")
+
     api_base_url = (payload.api_base_url or settings.discovery_api_base_url or "").strip()
     if not api_base_url:
         raise HTTPException(status_code=400, detail="api_base_url is missing")
@@ -77,6 +81,14 @@ def run_discovery(payload: DiscoveryRunRequest, _: None = Depends(require_write_
         command.append("--include-stretch")
     if payload.verbose:
         command.append("--verbose")
+    if payload.salary_min_usd is not None:
+        command.extend(["--salary-min-usd", str(payload.salary_min_usd)])
+    if seniority:
+        command.extend(["--seniority", seniority])
+    if payload.timezones:
+        timezone_tokens = [tz.strip() for tz in payload.timezones if tz and tz.strip()]
+        if timezone_tokens:
+            command.extend(["--timezones", ",".join(timezone_tokens)])
     if payload.sources:
         selected_sources = [src.strip().lower() for src in payload.sources if src and src.strip()]
         if selected_sources:

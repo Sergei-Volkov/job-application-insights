@@ -125,6 +125,9 @@ export interface DiscoveryRunPayload {
   max_age_days?: number
   include_stretch?: boolean
   profile?: 'de' | 'swe' | 'other'
+  salary_min_usd?: number
+  timezones?: string[]
+  seniority?: 'junior' | 'mid' | 'senior'
   cv_path?: string
   api_base_url?: string
   verbose?: boolean

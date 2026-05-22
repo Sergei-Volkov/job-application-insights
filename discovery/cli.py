@@ -52,6 +52,23 @@ def main() -> int:
         action="store_true",
         help="Print source-by-source collection diagnostics and filtering summary.",
     )
+    parser.add_argument(
+        "--salary-min-usd",
+        type=int,
+        default=None,
+        help="Optional minimum salary threshold in USD when salary data is present.",
+    )
+    parser.add_argument(
+        "--timezones",
+        default="",
+        help="Comma-separated preferred timezone tokens, e.g. UTC,CET,EMEA,US.",
+    )
+    parser.add_argument(
+        "--seniority",
+        choices=["junior", "mid", "senior"],
+        default=None,
+        help="Minimum seniority level to include.",
+    )
     args = parser.parse_args()
 
     if args.output_dir:
@@ -86,6 +103,9 @@ def main() -> int:
         min_score=1,
         max_age_days=120,
         include_stretch=True,
+        salary_min_usd=args.salary_min_usd,
+        allowed_timezones=[tz.strip() for tz in str(args.timezones).split(",") if tz.strip()] or None,
+        seniority=args.seniority,
         sources=requested_sources,
     )
     strict_matches = [
@@ -105,7 +125,12 @@ def main() -> int:
 
     csv_path, md_path, broad_md_path = outputs.write_outputs(strict_matches, broad_matches, collection_report)
     notes_path = outputs.write_application_notes(strict_matches)
-    synced_count, failed_rows = outputs.sync_application_api(strict_matches, args.api_base_url, DEFAULT_API_WRITE_KEY)
+    synced_count, failed_rows = outputs.sync_application_api(
+        strict_matches,
+        args.api_base_url,
+        DEFAULT_API_WRITE_KEY,
+        match_profile=shared.ACTIVE_PROFILE,
+    )
     checklist_path = outputs.write_selected_jobs_checklist(strict_matches)
 
     source_errors = [report for report in collection_report.sources if report.error]
@@ -120,6 +145,9 @@ def main() -> int:
         print(f"- filtered_age={collection_report.filtered_age}")
         print(f"- filtered_score={collection_report.filtered_score}")
         print(f"- filtered_stretch={collection_report.filtered_stretch}")
+        print(f"- filtered_salary={collection_report.filtered_salary}")
+        print(f"- filtered_timezone={collection_report.filtered_timezone}")
+        print(f"- filtered_seniority={collection_report.filtered_seniority}")
         print(f"- dedup_collisions={collection_report.dedup_collisions}")
         print(f"- deduped_total={collection_report.deduped_total}")
 
