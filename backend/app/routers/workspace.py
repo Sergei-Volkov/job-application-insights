@@ -1,4 +1,6 @@
 from pathlib import Path
+import shutil
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -138,15 +140,50 @@ def generate_documents(
     notes_text = notes_template.read_text(encoding="utf-8")
     cv_text = cv_template.read_text(encoding="utf-8")
 
-    vacancy_path.write_text(vacancy_text, encoding="utf-8")
-    cover_letter_path.write_text(cover_letter_text, encoding="utf-8")
-    notes_path.write_text(notes_text, encoding="utf-8")
-    cv_path.write_text(cv_text, encoding="utf-8")
+    file_payloads = {
+        vacancy_path: vacancy_text,
+        cover_letter_path: cover_letter_text,
+        notes_path: notes_text,
+        cv_path: cv_text,
+    }
+    temp_paths: list[Path] = []
+    backup_paths: dict[Path, Path] = {}
+
+    for target, content in file_payloads.items():
+        token = uuid4().hex
+        temp_path = target.with_name(f".{target.name}.tmp-{token}")
+        temp_path.write_text(content, encoding="utf-8")
+        temp_paths.append(temp_path)
+
+        if target.exists():
+            backup_path = target.with_name(f".{target.name}.bak-{token}")
+            shutil.copy2(target, backup_path)
+            backup_paths[target] = backup_path
 
     workspace = workspace_root()
-    record.resume_ref = safe_relative_path(cv_path, workspace)
-    record.cover_letter_ref = safe_relative_path(cover_letter_path, workspace)
-    db.commit()
+    try:
+        for target, temp_path in zip(file_payloads.keys(), temp_paths):
+            temp_path.replace(target)
+
+        record.resume_ref = safe_relative_path(cv_path, workspace)
+        record.cover_letter_ref = safe_relative_path(cover_letter_path, workspace)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        for target in file_payloads:
+            backup_path = backup_paths.get(target)
+            if backup_path and backup_path.exists():
+                backup_path.replace(target)
+            elif target.exists():
+                target.unlink()
+        raise HTTPException(status_code=500, detail="Failed to generate documents") from exc
+    finally:
+        for temp_path in temp_paths:
+            if temp_path.exists():
+                temp_path.unlink()
+        for backup_path in backup_paths.values():
+            if backup_path.exists():
+                backup_path.unlink()
 
     return GenerateDocumentsResult(
         vacancy_dir=safe_relative_path(target_dir, workspace),

@@ -77,6 +77,14 @@ export interface TrendItem {
   count: number
 }
 
+export interface ScoreBreakdown {
+  score: number | null
+  fit: string
+  matched_keywords: string[]
+  missing_skills: string[]
+  fit_notes: string
+}
+
 export interface ApplicationItem {
   id: number
   selected: string
@@ -101,6 +109,7 @@ export interface ApplicationItem {
   listing_fingerprint: string
   change_note: string
   notes: string
+  score_breakdown?: ScoreBreakdown | null
 }
 
 export interface ApplicationPatch {
@@ -132,6 +141,18 @@ export interface DiscoveryRunPayload {
   prior_lookback_days?: number
   source_prior_weight?: number
   role_prior_weight?: number
+  use_llm_reranker?: boolean
+  llm_top_n?: number
+  llm_weight?: number
+  llm_model?: string
+  llm_api_base_url?: string
+  llm_dry_run?: boolean
+  llm_max_calls?: number
+  llm_max_input_chars?: number
+  llm_max_retries?: number
+  llm_retry_backoff_seconds?: number
+  llm_timeout_seconds?: number
+  output_dir?: string
   cv_path?: string
   api_base_url?: string
   verbose?: boolean

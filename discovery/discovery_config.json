@@ -1,0 +1,177 @@
+{
+  "sources": {
+    "wwr_feeds": [
+      "https://weworkremotely.com/categories/all-other-remote-jobs.rss",
+      "https://weworkremotely.com/categories/remote-devops-sysadmin-jobs.rss",
+      "https://weworkremotely.com/categories/remote-back-end-programming-jobs.rss",
+      "https://weworkremotely.com/categories/remote-front-end-programming-jobs.rss"
+    ],
+    "jobicy_feed": "https://jobicy.com/?feed=job_feed",
+    "working_nomads_api": "https://www.workingnomads.com/api/exposed_jobs/",
+    "remoteok_api": "https://remoteok.com/api",
+    "remotive_api": "https://remotive.com/api/remote-jobs?search={query}",
+    "arbeitnow_api": "https://www.arbeitnow.com/api/job-board-api",
+    "source_options": [
+      "wwr",
+      "working_nomads",
+      "remoteok",
+      "remotive",
+      "arbeitnow",
+      "jobicy"
+    ]
+  },
+  "profiles": {
+    "search_terms": {
+      "de": [
+        "data engineer",
+        "analytics engineer",
+        "data platform",
+        "airflow",
+        "etl"
+      ],
+      "swe": [
+        "software engineer",
+        "backend engineer",
+        "platform engineer",
+        "infrastructure engineer"
+      ],
+      "other": [
+        "data engineer",
+        "software engineer",
+        "platform engineer",
+        "etl",
+        "backend engineer"
+      ]
+    },
+    "default_search_terms": [
+      "data engineer",
+      "analytics engineer",
+      "data platform",
+      "airflow",
+      "etl"
+    ],
+    "reject_patterns": [
+      "data scientist",
+      "data annotator",
+      "marketing analytics",
+      "ga4",
+      "gtm",
+      "manager",
+      "director",
+      "frontend",
+      "front end",
+      "full stack",
+      "prompt engineering",
+      "dataannotation",
+      "voip",
+      "volunteer",
+      "talent community"
+    ]
+  },
+  "scoring": {
+    "keyword_weights": {
+      "python": 3,
+      "sql": 3,
+      "airflow": 3,
+      "etl": 2,
+      "elt": 2,
+      "postgres": 2,
+      "postgresql": 2,
+      "docker": 2,
+      "aws": 2,
+      "dbt": 2,
+      "databricks": 2,
+      "bigquery": 2,
+      "gcp": 2,
+      "terraform": 1,
+      "analytics": 1,
+      "reporting": 1,
+      "data quality": 2,
+      "pipeline": 2,
+      "warehouse": 1,
+      "snowflake": 2
+    },
+    "display_names": {
+      "python": "Python",
+      "sql": "SQL",
+      "airflow": "Airflow",
+      "etl": "ETL",
+      "elt": "ELT",
+      "postgres": "PostgreSQL",
+      "postgresql": "PostgreSQL",
+      "docker": "Docker",
+      "aws": "AWS",
+      "dbt": "dbt",
+      "databricks": "Databricks",
+      "bigquery": "BigQuery",
+      "gcp": "GCP",
+      "terraform": "Terraform",
+      "analytics": "analytics",
+      "reporting": "reporting",
+      "data quality": "data quality",
+      "pipeline": "pipelines",
+      "warehouse": "data warehousing",
+      "snowflake": "Snowflake"
+    },
+    "skill_patterns": {
+      "python": [
+        "\\bpython\\b"
+      ],
+      "sql": [
+        "\\bsql\\b",
+        "sqlalchemy"
+      ],
+      "airflow": [
+        "\\bairflow\\b"
+      ],
+      "etl": [
+        "\\betl\\b",
+        "pipelines?"
+      ],
+      "elt": [
+        "\\belt\\b"
+      ],
+      "postgres": [
+        "\\bpostgres\\b",
+        "\\bpostgresql\\b"
+      ],
+      "postgresql": [
+        "\\bpostgresql\\b"
+      ],
+      "docker": [
+        "\\bdocker\\b"
+      ],
+      "aws": [
+        "\\baws\\b"
+      ],
+      "analytics": [
+        "\\banalytics\\b",
+        "analysis-ready",
+        "reporting"
+      ],
+      "reporting": [
+        "\\breporting\\b"
+      ],
+      "data quality": [
+        "data quality",
+        "validation"
+      ],
+      "pipeline": [
+        "pipelines?"
+      ],
+      "warehouse": [
+        "warehouse",
+        "warehouse-ready"
+      ]
+    },
+    "seniority_levels": {
+      "junior": 1,
+      "mid": 2,
+      "senior": 3,
+      "lead": 4,
+      "staff": 5
+    },
+    "score_strong_min": 12,
+    "score_medium_min": 7
+  }
+}

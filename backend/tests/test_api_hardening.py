@@ -1,4 +1,5 @@
 import os
+import json
 from datetime import datetime
 from pathlib import Path
 import shutil
@@ -54,6 +55,7 @@ from app.pathing import (  # noqa: E402
     resolve_from_applications_root,
     safe_relative_path,
 )
+from app.routers import discovery as discovery_router  # noqa: E402
 
 Base.metadata.create_all(bind=engine)
 
@@ -79,6 +81,10 @@ def _clear_db() -> None:
     with SessionLocal() as db:
         db.query(JobApplication).delete()
         db.commit()
+
+
+def _reset_discovery_guard() -> None:
+    discovery_router._reset_discovery_run_guard()
 
 
 def test_write_endpoints_require_api_key() -> None:
@@ -129,8 +135,40 @@ def test_status_filter_is_exact_match_case_insensitive() -> None:
     assert rows[0]["status"] == "Applied"
 
 
+def test_applications_include_score_breakdown_when_present() -> None:
+    _clear_db()
+
+    payload = _base_payload(
+        link="https://example.com/job/score-breakdown",
+        fit="Strong",
+        fit_score=13,
+        change_note=json.dumps(
+            {
+                "score": 13,
+                "fit": "Strong",
+                "matched_keywords": ["Python", "SQL"],
+                "missing_skills": ["dbt"],
+                "fit_notes": "Direct overlap on Python, SQL.",
+            }
+        ),
+    )
+
+    created = client.post("/applications/upsert", json=payload, headers=_auth_headers())
+    assert created.status_code == 200
+
+    listed = client.get("/applications?limit=50")
+    assert listed.status_code == 200
+    rows = listed.json()
+    assert len(rows) == 1
+    assert rows[0]["score_breakdown"] is not None
+    assert rows[0]["score_breakdown"]["score"] == 13
+    assert rows[0]["score_breakdown"]["fit"] == "Strong"
+    assert rows[0]["score_breakdown"]["matched_keywords"] == ["Python", "SQL"]
+
+
 def test_run_discovery_output_is_summarized() -> None:
     _clear_db()
+    _reset_discovery_guard()
 
     class Completed:
         returncode = 0
@@ -147,6 +185,36 @@ def test_run_discovery_output_is_summarized() -> None:
     assert response.status_code == 200
     data = response.json()
 
+    assert data["command"] == []
+    assert "Enable verbose=true" in data["stdout"]
+    assert data["stderr"] == ""
+
+
+def test_run_discovery_verbose_output_is_summarized() -> None:
+    _clear_db()
+    _reset_discovery_guard()
+
+    class Completed:
+        returncode = 0
+        stdout = "A" * 600
+        stderr = "B" * 600
+
+    with patch("app.routers.discovery.subprocess.run", return_value=Completed()):
+        response = client.post(
+            "/run-discovery",
+            json={
+                "limit": 5,
+                "min_score": 1,
+                "max_age_days": 10,
+                "include_stretch": False,
+                "verbose": True,
+                "api_base_url": "http://127.0.0.1:8000",
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 200
+    data = response.json()
     assert "output truncated" in data["stdout"]
     assert "output truncated" in data["stderr"]
     assert len(data["stdout"]) <= 80
@@ -155,6 +223,7 @@ def test_run_discovery_output_is_summarized() -> None:
 
 def test_run_discovery_forwards_profile_mode() -> None:
     _clear_db()
+    _reset_discovery_guard()
 
     class Completed:
         returncode = 0
@@ -179,6 +248,18 @@ def test_run_discovery_forwards_profile_mode() -> None:
                 "prior_lookback_days": 180,
                 "source_prior_weight": 1.4,
                 "role_prior_weight": 0.9,
+                "use_llm_reranker": True,
+                "llm_top_n": 12,
+                "llm_weight": 0.8,
+                "llm_model": "gpt-4o-mini",
+                "llm_api_base_url": "https://api.openai.com/v1",
+                "llm_dry_run": True,
+                "llm_max_calls": 9,
+                "llm_max_input_chars": 18000,
+                "llm_max_retries": 3,
+                "llm_retry_backoff_seconds": 0.6,
+                "llm_timeout_seconds": 25,
+                "output_dir": "applications/tracker",
             },
             headers=_auth_headers(),
         )
@@ -189,6 +270,8 @@ def test_run_discovery_forwards_profile_mode() -> None:
     assert "swe" in command
     assert "--api-base-url" in command
     assert "http://127.0.0.1:8000" in command
+    assert "--max-age-days" in command
+    assert "10" in command
     assert "--verbose" in command
     assert "--salary-min-usd" in command
     assert "120000" in command
@@ -203,6 +286,28 @@ def test_run_discovery_forwards_profile_mode() -> None:
     assert "1.4" in command
     assert "--role-prior-weight" in command
     assert "0.9" in command
+    assert "--use-llm-reranker" in command
+    assert "--llm-top-n" in command
+    assert "12" in command
+    assert "--llm-weight" in command
+    assert "0.8" in command
+    assert "--llm-model" in command
+    assert "gpt-4o-mini" in command
+    assert "--llm-api-base-url" in command
+    assert "https://api.openai.com/v1" in command
+    assert "--llm-dry-run" in command
+    assert "--llm-max-calls" in command
+    assert "9" in command
+    assert "--llm-max-input-chars" in command
+    assert "18000" in command
+    assert "--llm-max-retries" in command
+    assert "3" in command
+    assert "--llm-retry-backoff-seconds" in command
+    assert "0.6" in command
+    assert "--llm-timeout-seconds" in command
+    assert "25" in command
+    assert "--output-dir" in command
+    assert any(str(part).endswith("/applications/tracker") for part in command)
 
 
 def test_generate_documents_and_workspace_file_editing() -> None:
@@ -301,6 +406,35 @@ def test_generate_documents_overwrite_flow() -> None:
         cover_template.write_text(original_template, encoding="utf-8")
 
 
+def test_generate_documents_cleans_files_when_commit_fails() -> None:
+    _clear_db()
+    target_dir = _APPLICATIONS_ROOT / "vacancies" / "rollback_inc_data_engineer"
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+
+    created = client.post(
+        "/applications/upsert",
+        json=_base_payload(company="Rollback Inc", role="Data Engineer", link="https://example.com/jobs/gen-fail"),
+        headers=_auth_headers(),
+    )
+    assert created.status_code == 200
+    application_id = created.json()["id"]
+
+    with patch("app.routers.workspace.Session.commit", side_effect=RuntimeError("commit failed")):
+        failed = client.post(
+            f"/applications/{application_id}/generate-documents",
+            json={"overwrite": True},
+            headers=_auth_headers(),
+        )
+
+    assert failed.status_code == 500
+    assert failed.json()["detail"] == "Failed to generate documents"
+    assert not (target_dir / "vacancy.md").exists()
+    assert not (target_dir / "cover_letter.md").exists()
+    assert not (target_dir / "notes.md").exists()
+    assert not (target_dir / "cv.tex").exists()
+
+
 def test_health_and_stats_endpoints() -> None:
     _clear_db()
 
@@ -378,6 +512,7 @@ def test_path_and_helper_sanity() -> None:
 
 def test_run_discovery_failure_truncates_stderr() -> None:
     _clear_db()
+    _reset_discovery_guard()
 
     class Completed:
         returncode = 1
@@ -400,5 +535,80 @@ def test_run_discovery_failure_truncates_stderr() -> None:
     assert response.status_code == 500
     detail = response.json()["detail"]
     assert "Discovery script failed with exit code 1" in detail
+    assert "Enable verbose=true" in detail
+
+
+def test_run_discovery_verbose_failure_truncates_stderr() -> None:
+    _clear_db()
+    _reset_discovery_guard()
+
+    class Completed:
+        returncode = 1
+        stdout = "ok"
+        stderr = "Z" * 600
+
+    with patch("app.routers.discovery.subprocess.run", return_value=Completed()):
+        response = client.post(
+            "/run-discovery",
+            json={
+                "limit": 5,
+                "min_score": 1,
+                "max_age_days": 10,
+                "include_stretch": False,
+                "verbose": True,
+                "api_base_url": "http://127.0.0.1:8000",
+            },
+            headers=_auth_headers(),
+        )
+
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert "Discovery script failed with exit code 1" in detail
     assert "output truncated" in detail
     assert len(detail) <= 500
+
+
+def test_run_discovery_rate_limit_blocks_immediate_repeat() -> None:
+    _clear_db()
+    _reset_discovery_guard()
+
+    class Completed:
+        returncode = 0
+        stdout = "ok"
+        stderr = ""
+
+    payload = {
+        "limit": 5,
+        "min_score": 1,
+        "max_age_days": 10,
+        "include_stretch": False,
+        "api_base_url": "http://127.0.0.1:8000",
+    }
+
+    with patch("app.routers.discovery.subprocess.run", return_value=Completed()):
+        first = client.post("/run-discovery", json=payload, headers=_auth_headers())
+        second = client.post("/run-discovery", json=payload, headers=_auth_headers())
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert "rate-limited" in second.json()["detail"]
+
+
+def test_run_discovery_rejects_invalid_numeric_bounds() -> None:
+    _clear_db()
+    _reset_discovery_guard()
+
+    response = client.post(
+        "/run-discovery",
+        json={
+            "limit": 0,
+            "min_score": -1,
+            "max_age_days": 0,
+            "llm_max_input_chars": -100,
+            "llm_timeout_seconds": 0,
+            "api_base_url": "http://127.0.0.1:8000",
+        },
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == 422

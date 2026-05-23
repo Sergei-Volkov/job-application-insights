@@ -35,6 +35,26 @@ import { filterApplications, isNewListing, isUpdatedListing, normalizedProfile }
 import { renderMarkdownPreview, renderTexPreview } from './utils/preview'
 import './App.css'
 
+const SCORE_STRONG_MIN = 12
+const SCORE_MEDIUM_MIN = 7
+
+type ScoreBreakdown = {
+  score: number | null
+  fit: string
+  matchedKeywords: string[]
+  missingSkills: string[]
+  fitNotes: string
+}
+
+type LlmDryRunDiagnostics = {
+  dryRun: boolean
+  plannedCalls: number | null
+  attempted: number | null
+  adjusted: number | null
+  usedInputChars: number | null
+  warningsCount: number | null
+}
+
 export default function App() {
   const [stats, setStats] = useState<Stats | null>(null)
   const [skills, setSkills] = useState<SkillItem[]>([])
@@ -53,7 +73,31 @@ export default function App() {
     return (saved as AppPage) || 'pipeline'
   })
   const [customNextStepById, setCustomNextStepById] = useState<Record<number, string>>({})
-  const [discoveryParams, setDiscoveryParams] = useState({ limit: 40, min_score: 7, max_age_days: 45, include_stretch: false })
+  const [discoveryParams, setDiscoveryParams] = useState({
+    limit: 40,
+    min_score: 7,
+    max_age_days: 45,
+    include_stretch: false,
+    salary_min_usd: '',
+    timezones: '',
+    seniority: '',
+    use_outcome_priors: false,
+    prior_lookback_days: 365,
+    source_prior_weight: 1,
+    role_prior_weight: 1,
+    use_llm_reranker: false,
+    llm_top_n: 20,
+    llm_weight: 1,
+    llm_model: '',
+    llm_api_base_url: '',
+    llm_dry_run: false,
+    llm_max_calls: 20,
+    llm_max_input_chars: 50000,
+    llm_max_retries: 2,
+    llm_retry_backoff_seconds: 0.5,
+    llm_timeout_seconds: 20,
+    output_dir: '',
+  })
   const [analyticsProfileFilter, setAnalyticsProfileFilter] = useState<'all' | DiscoveryProfile>('all')
   const [analyticsListingFilter, setAnalyticsListingFilter] = useState<ListingFilter>('all')
   const [manualJobForm, setManualJobForm] = useState({ company: '', role: '', link: '', description: '' })
@@ -205,6 +249,39 @@ export default function App() {
     return ''
   }, [activeFileExt, fileDraft])
 
+  const llmDryRunDiagnostics = useMemo<LlmDryRunDiagnostics | null>(() => {
+    const output = discoveryResult?.stdout || ''
+    if (!output.trim()) return null
+
+    const parseLineValue = (key: string): string | null => {
+      const line = output
+        .split('\n')
+        .map((part) => part.trim())
+        .find((part) => part.startsWith(`- ${key}=`))
+      if (!line) return null
+      return line.slice(`- ${key}=`.length).trim()
+    }
+
+    const dryRunRaw = parseLineValue('llm_dry_run')
+    if (!dryRunRaw) return null
+
+    const toNumber = (value: string | null): number | null => {
+      if (!value) return null
+      const parsed = parseInt(value, 10)
+      return Number.isNaN(parsed) ? null : parsed
+    }
+
+    const isDryRun = dryRunRaw.toLowerCase() === 'true'
+    return {
+      dryRun: isDryRun,
+      plannedCalls: toNumber(parseLineValue('llm_planned_calls')),
+      attempted: toNumber(parseLineValue('llm_attempted')),
+      adjusted: toNumber(parseLineValue('llm_adjusted')),
+      usedInputChars: toNumber(parseLineValue('llm_used_input_chars')),
+      warningsCount: toNumber(parseLineValue('llm_warnings')),
+    }
+  }, [discoveryResult])
+
   const saveRow = async (row: EditableRow) => {
     patchLocal(row.id, { saving: true })
     try {
@@ -243,6 +320,47 @@ export default function App() {
     }
 
     patchLocal(row.id, { next_step: selected })
+  }
+
+  const scoreBandLabel = (score: number) => {
+    if (score >= SCORE_STRONG_MIN) return 'Strong'
+    if (score >= SCORE_MEDIUM_MIN) return 'Medium'
+    return 'Stretch'
+  }
+
+  const parseScoreBreakdown = (row: EditableRow): ScoreBreakdown => {
+    const typed = row.score_breakdown
+    if (typed && typeof typed === 'object') {
+      return {
+        score: typeof typed.score === 'number' ? typed.score : row.fit_score,
+        fit: (typed.fit || row.fit || '').trim(),
+        matchedKeywords: Array.isArray(typed.matched_keywords) ? typed.matched_keywords.filter(Boolean) : [],
+        missingSkills: Array.isArray(typed.missing_skills) ? typed.missing_skills.filter(Boolean) : [],
+        fitNotes: (typed.fit_notes || row.notes || '').trim(),
+      }
+    }
+
+    let parsed: {
+      score?: number
+      fit?: string
+      matched_keywords?: string[]
+      missing_skills?: string[]
+      fit_notes?: string
+    } = {}
+
+    try {
+      parsed = row.change_note ? (JSON.parse(row.change_note) as typeof parsed) : {}
+    } catch {
+      parsed = {}
+    }
+
+    return {
+      score: typeof parsed.score === 'number' ? parsed.score : row.fit_score,
+      fit: (parsed.fit || row.fit || '').trim(),
+      matchedKeywords: Array.isArray(parsed.matched_keywords) ? parsed.matched_keywords.filter(Boolean) : [],
+      missingSkills: Array.isArray(parsed.missing_skills) ? parsed.missing_skills.filter(Boolean) : [],
+      fitNotes: (parsed.fit_notes || row.notes || '').trim(),
+    }
   }
 
   const startProcessForRow = async (row: EditableRow) => {
@@ -377,6 +495,15 @@ export default function App() {
     setDiscovering(true)
     setError(null)
     try {
+      const salaryMinUsd = discoveryParams.salary_min_usd.trim()
+      const timezoneTokens = discoveryParams.timezones
+        .split(',')
+        .map((part) => part.trim())
+        .filter(Boolean)
+      const seniority = discoveryParams.seniority.trim() as '' | 'junior' | 'mid' | 'senior'
+      const outputDir = discoveryParams.output_dir.trim()
+      const llmModel = discoveryParams.llm_model.trim()
+      const llmApiBaseUrl = discoveryParams.llm_api_base_url.trim()
       const selectedSources = DISCOVERY_SOURCES.map((source) => source.key).filter(
         (sourceKey) => discoverySourceSelection[sourceKey]
       )
@@ -386,6 +513,25 @@ export default function App() {
         max_age_days: discoveryParams.max_age_days,
         include_stretch: discoveryParams.include_stretch,
         profile: discoveryProfile,
+        salary_min_usd: salaryMinUsd ? parseInt(salaryMinUsd, 10) || undefined : undefined,
+        timezones: timezoneTokens.length > 0 ? timezoneTokens : undefined,
+        seniority: seniority || undefined,
+        use_outcome_priors: discoveryParams.use_outcome_priors,
+        prior_lookback_days: discoveryParams.prior_lookback_days,
+        source_prior_weight: discoveryParams.source_prior_weight,
+        role_prior_weight: discoveryParams.role_prior_weight,
+        use_llm_reranker: discoveryParams.use_llm_reranker,
+        llm_top_n: discoveryParams.llm_top_n,
+        llm_weight: discoveryParams.llm_weight,
+        llm_model: llmModel || undefined,
+        llm_api_base_url: llmApiBaseUrl || undefined,
+        llm_dry_run: discoveryParams.llm_dry_run,
+        llm_max_calls: discoveryParams.llm_max_calls,
+        llm_max_input_chars: discoveryParams.llm_max_input_chars,
+        llm_max_retries: discoveryParams.llm_max_retries,
+        llm_retry_backoff_seconds: discoveryParams.llm_retry_backoff_seconds,
+        llm_timeout_seconds: discoveryParams.llm_timeout_seconds,
+        output_dir: outputDir || undefined,
         cv_path: discoveryCvPath.trim() || undefined,
         api_base_url: discoveryApiBaseUrl.trim() || undefined,
         verbose: discoveryVerbose,
@@ -574,6 +720,9 @@ export default function App() {
                     min="1"
                   />
                 </div>
+                <p className="subtitle small" style={{ marginTop: '8px', marginBottom: '8px' }}>
+                  Score ranges: Strong {`>= ${SCORE_STRONG_MIN}`}, Medium {`${SCORE_MEDIUM_MIN}-${SCORE_STRONG_MIN - 1}`}, Stretch {`<= ${SCORE_MEDIUM_MIN - 1}`}
+                </p>
                 <div className="toolbar" style={{ marginTop: '8px' }}>
                   <label className="toolbar-label" htmlFor="discovery-cv-path">
                     CV path
@@ -617,6 +766,312 @@ export default function App() {
                       />
                       Verbose logs
                     </label>
+                  </div>
+                  <div className="toolbar" style={{ marginTop: '8px' }}>
+                    <label className="toolbar-label" htmlFor="discovery-salary-min-usd">
+                      Min salary (USD)
+                    </label>
+                    <input
+                      id="discovery-salary-min-usd"
+                      className="text-input compact-input"
+                      type="number"
+                      min="0"
+                      placeholder="optional"
+                      value={discoveryParams.salary_min_usd}
+                      onChange={(e) => setDiscoveryParams({ ...discoveryParams, salary_min_usd: e.target.value })}
+                    />
+                    <label className="toolbar-label" htmlFor="discovery-seniority">
+                      Seniority
+                    </label>
+                    <select
+                      id="discovery-seniority"
+                      className="text-input select-input compact-input"
+                      value={discoveryParams.seniority}
+                      onChange={(e) => setDiscoveryParams({ ...discoveryParams, seniority: e.target.value })}
+                    >
+                      <option value="">Any</option>
+                      <option value="junior">Junior+</option>
+                      <option value="mid">Mid+</option>
+                      <option value="senior">Senior</option>
+                    </select>
+                  </div>
+                  <div className="toolbar" style={{ marginTop: '8px' }}>
+                    <label className="toolbar-label" htmlFor="discovery-timezones">
+                      Timezones
+                    </label>
+                    <input
+                      id="discovery-timezones"
+                      className="text-input"
+                      type="text"
+                      placeholder="UTC,CET,EMEA"
+                      value={discoveryParams.timezones}
+                      onChange={(e) => setDiscoveryParams({ ...discoveryParams, timezones: e.target.value })}
+                      style={{ minWidth: '200px', flex: 1 }}
+                    />
+                    <label className="toolbar-label" htmlFor="discovery-output-dir">
+                      Output dir
+                    </label>
+                    <input
+                      id="discovery-output-dir"
+                      className="text-input"
+                      type="text"
+                      placeholder="applications/tracker"
+                      value={discoveryParams.output_dir}
+                      onChange={(e) => setDiscoveryParams({ ...discoveryParams, output_dir: e.target.value })}
+                      style={{ minWidth: '200px', flex: 1 }}
+                    />
+                  </div>
+                  <div className="toolbar" style={{ marginTop: '8px' }}>
+                    <label className="toolbar-label" title="Re-rank by historical outcome of source and role family.">
+                      <input
+                        type="checkbox"
+                        checked={discoveryParams.use_outcome_priors}
+                        onChange={(e) =>
+                          setDiscoveryParams({
+                            ...discoveryParams,
+                            use_outcome_priors: e.target.checked,
+                          })
+                        }
+                        style={{ marginRight: '4px' }}
+                      />
+                      Use outcome priors
+                    </label>
+                    <label className="toolbar-label" htmlFor="discovery-prior-lookback-days">
+                      Prior lookback
+                    </label>
+                    <input
+                      id="discovery-prior-lookback-days"
+                      className="text-input compact-input"
+                      type="number"
+                      min="1"
+                      value={discoveryParams.prior_lookback_days}
+                      onChange={(e) =>
+                        setDiscoveryParams({
+                          ...discoveryParams,
+                          prior_lookback_days: parseInt(e.target.value, 10) || 365,
+                        })
+                      }
+                      disabled={!discoveryParams.use_outcome_priors}
+                    />
+                    <label className="toolbar-label" htmlFor="discovery-source-prior-weight">
+                      Source weight
+                    </label>
+                    <input
+                      id="discovery-source-prior-weight"
+                      className="text-input compact-input"
+                      type="number"
+                      step="0.1"
+                      value={discoveryParams.source_prior_weight}
+                      onChange={(e) =>
+                        setDiscoveryParams({
+                          ...discoveryParams,
+                          source_prior_weight: parseFloat(e.target.value) || 1,
+                        })
+                      }
+                      disabled={!discoveryParams.use_outcome_priors}
+                    />
+                    <label className="toolbar-label" htmlFor="discovery-role-prior-weight">
+                      Role weight
+                    </label>
+                    <input
+                      id="discovery-role-prior-weight"
+                      className="text-input compact-input"
+                      type="number"
+                      step="0.1"
+                      value={discoveryParams.role_prior_weight}
+                      onChange={(e) =>
+                        setDiscoveryParams({
+                          ...discoveryParams,
+                          role_prior_weight: parseFloat(e.target.value) || 1,
+                        })
+                      }
+                      disabled={!discoveryParams.use_outcome_priors}
+                    />
+                  </div>
+                  <div className="toolbar" style={{ marginTop: '8px' }}>
+                    <label className="toolbar-label" title="Use LLM to conservatively adjust score for top candidates.">
+                      <input
+                        type="checkbox"
+                        checked={discoveryParams.use_llm_reranker}
+                        onChange={(e) =>
+                          setDiscoveryParams({
+                            ...discoveryParams,
+                            use_llm_reranker: e.target.checked,
+                          })
+                        }
+                        style={{ marginRight: '4px' }}
+                      />
+                      Use LLM reranker
+                    </label>
+                    <label className="toolbar-label" htmlFor="discovery-llm-top-n">
+                      LLM top N
+                    </label>
+                    <input
+                      id="discovery-llm-top-n"
+                      className="text-input compact-input"
+                      type="number"
+                      min="1"
+                      value={discoveryParams.llm_top_n}
+                      onChange={(e) =>
+                        setDiscoveryParams({
+                          ...discoveryParams,
+                          llm_top_n: parseInt(e.target.value, 10) || 20,
+                        })
+                      }
+                      disabled={!discoveryParams.use_llm_reranker}
+                    />
+                    <label className="toolbar-label" htmlFor="discovery-llm-weight">
+                      LLM weight
+                    </label>
+                    <input
+                      id="discovery-llm-weight"
+                      className="text-input compact-input"
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      value={discoveryParams.llm_weight}
+                      onChange={(e) =>
+                        setDiscoveryParams({
+                          ...discoveryParams,
+                          llm_weight: parseFloat(e.target.value) || 1,
+                        })
+                      }
+                      disabled={!discoveryParams.use_llm_reranker}
+                    />
+                    <label className="toolbar-label" title="Dry-run mode: show planning diagnostics and skip external API calls.">
+                      <input
+                        type="checkbox"
+                        checked={discoveryParams.llm_dry_run}
+                        onChange={(e) =>
+                          setDiscoveryParams({
+                            ...discoveryParams,
+                            llm_dry_run: e.target.checked,
+                          })
+                        }
+                        style={{ marginRight: '4px' }}
+                        disabled={!discoveryParams.use_llm_reranker}
+                      />
+                      Dry-run explain
+                    </label>
+                  </div>
+                  <div className="toolbar" style={{ marginTop: '8px' }}>
+                    <label className="toolbar-label" htmlFor="discovery-llm-model">
+                      LLM model
+                    </label>
+                    <input
+                      id="discovery-llm-model"
+                      className="text-input"
+                      type="text"
+                      placeholder="gpt-4o-mini"
+                      value={discoveryParams.llm_model}
+                      onChange={(e) => setDiscoveryParams({ ...discoveryParams, llm_model: e.target.value })}
+                      style={{ minWidth: '180px', flex: 1 }}
+                      disabled={!discoveryParams.use_llm_reranker}
+                    />
+                    <label className="toolbar-label" htmlFor="discovery-llm-api-base-url">
+                      LLM API base URL
+                    </label>
+                    <input
+                      id="discovery-llm-api-base-url"
+                      className="text-input"
+                      type="text"
+                      placeholder="https://api.openai.com/v1"
+                      value={discoveryParams.llm_api_base_url}
+                      onChange={(e) => setDiscoveryParams({ ...discoveryParams, llm_api_base_url: e.target.value })}
+                      style={{ minWidth: '220px', flex: 1 }}
+                      disabled={!discoveryParams.use_llm_reranker}
+                    />
+                  </div>
+                  <div className="toolbar" style={{ marginTop: '8px' }}>
+                    <label className="toolbar-label" htmlFor="discovery-llm-max-calls">
+                      Max calls
+                    </label>
+                    <input
+                      id="discovery-llm-max-calls"
+                      className="text-input compact-input"
+                      type="number"
+                      min="1"
+                      value={discoveryParams.llm_max_calls}
+                      onChange={(e) =>
+                        setDiscoveryParams({
+                          ...discoveryParams,
+                          llm_max_calls: parseInt(e.target.value, 10) || 20,
+                        })
+                      }
+                      disabled={!discoveryParams.use_llm_reranker}
+                    />
+                    <label className="toolbar-label" htmlFor="discovery-llm-max-input-chars">
+                      Max input chars
+                    </label>
+                    <input
+                      id="discovery-llm-max-input-chars"
+                      className="text-input compact-input"
+                      type="number"
+                      min="1000"
+                      step="1000"
+                      value={discoveryParams.llm_max_input_chars}
+                      onChange={(e) =>
+                        setDiscoveryParams({
+                          ...discoveryParams,
+                          llm_max_input_chars: parseInt(e.target.value, 10) || 50000,
+                        })
+                      }
+                      disabled={!discoveryParams.use_llm_reranker}
+                    />
+                  </div>
+                  <div className="toolbar" style={{ marginTop: '8px' }}>
+                    <label className="toolbar-label" htmlFor="discovery-llm-max-retries">
+                      Max retries
+                    </label>
+                    <input
+                      id="discovery-llm-max-retries"
+                      className="text-input compact-input"
+                      type="number"
+                      min="0"
+                      value={discoveryParams.llm_max_retries}
+                      onChange={(e) =>
+                        setDiscoveryParams({
+                          ...discoveryParams,
+                          llm_max_retries: parseInt(e.target.value, 10) || 0,
+                        })
+                      }
+                      disabled={!discoveryParams.use_llm_reranker}
+                    />
+                    <label className="toolbar-label" htmlFor="discovery-llm-retry-backoff-seconds">
+                      Retry backoff (s)
+                    </label>
+                    <input
+                      id="discovery-llm-retry-backoff-seconds"
+                      className="text-input compact-input"
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      value={discoveryParams.llm_retry_backoff_seconds}
+                      onChange={(e) =>
+                        setDiscoveryParams({
+                          ...discoveryParams,
+                          llm_retry_backoff_seconds: parseFloat(e.target.value) || 0,
+                        })
+                      }
+                      disabled={!discoveryParams.use_llm_reranker}
+                    />
+                    <label className="toolbar-label" htmlFor="discovery-llm-timeout-seconds">
+                      Timeout (s)
+                    </label>
+                    <input
+                      id="discovery-llm-timeout-seconds"
+                      className="text-input compact-input"
+                      type="number"
+                      min="5"
+                      value={discoveryParams.llm_timeout_seconds}
+                      onChange={(e) =>
+                        setDiscoveryParams({
+                          ...discoveryParams,
+                          llm_timeout_seconds: parseInt(e.target.value, 10) || 20,
+                        })
+                      }
+                      disabled={!discoveryParams.use_llm_reranker}
+                    />
                   </div>
                 </details>
                 <div className="toolbar" style={{ marginTop: '8px' }}>
@@ -667,6 +1122,25 @@ export default function App() {
                     ))}
                   </div>
                 </div>
+                {llmDryRunDiagnostics && (
+                  <div className="dry-run-card">
+                    <strong>LLM {llmDryRunDiagnostics.dryRun ? 'Dry-run' : 'Rerank'} Report</strong>
+                    <div className="dry-run-grid">
+                      <span>Dry-run mode</span>
+                      <span>{llmDryRunDiagnostics.dryRun ? 'Yes' : 'No'}</span>
+                      <span>Planned calls</span>
+                      <span>{llmDryRunDiagnostics.plannedCalls ?? 'n/a'}</span>
+                      <span>Attempted calls</span>
+                      <span>{llmDryRunDiagnostics.attempted ?? 'n/a'}</span>
+                      <span>Adjusted rows</span>
+                      <span>{llmDryRunDiagnostics.adjusted ?? 'n/a'}</span>
+                      <span>Used input chars</span>
+                      <span>{llmDryRunDiagnostics.usedInputChars ?? 'n/a'}</span>
+                      <span>Warnings</span>
+                      <span>{llmDryRunDiagnostics.warningsCount ?? 'n/a'}</span>
+                    </div>
+                  </div>
+                )}
                 {discoveryResult && (
                   <div className="result-banner">
                     <strong>Discovery exit code:</strong> {discoveryResult.exit_code}
@@ -791,6 +1265,7 @@ export default function App() {
                     <tbody>
                       {filteredApplications.map((row) => {
                         const rowDocs = getRowDocLinks(row, generatedDocsById)
+                        const scoreBreakdown = parseScoreBreakdown(row)
                         return (
                           <tr key={row.id}>
                             <td>
@@ -810,8 +1285,30 @@ export default function App() {
                                   <span className="profile-pill">{normalizedProfile(row).toUpperCase()}</span>
                                 </div>
                                 <span>{row.role}</span>
+                                <span className="score-pill" title="Discovery fit score and band">
+                                  Score {row.fit_score} · {scoreBandLabel(row.fit_score)}
+                                </span>
                                 {isUpdatedListing(row) && <span className="status-pill">Updated</span>}
                                 {!isUpdatedListing(row) && isNewListing(row) && <span className="status-pill">New</span>}
+                                <details className="row-details">
+                                  <summary className="toggle-summary">Score breakdown</summary>
+                                  <div className="details-panel score-breakdown">
+                                    <div><strong>Total:</strong> {scoreBreakdown.score ?? row.fit_score}</div>
+                                    <div><strong>Band:</strong> {scoreBreakdown.fit || scoreBandLabel(row.fit_score)}</div>
+                                    <div>
+                                      <strong>Matched keywords:</strong> {scoreBreakdown.matchedKeywords.length > 0 ? scoreBreakdown.matchedKeywords.join(', ') : 'None listed'}
+                                    </div>
+                                    <div>
+                                      <strong>Missing/adjacent:</strong> {scoreBreakdown.missingSkills.length > 0 ? scoreBreakdown.missingSkills.join(', ') : 'None listed'}
+                                    </div>
+                                    <div>
+                                      <strong>Notes:</strong> {scoreBreakdown.fitNotes || 'No notes yet'}
+                                    </div>
+                                    <div className="muted-mini">
+                                      Ranges: Strong {`>= ${SCORE_STRONG_MIN}`}, Medium {`${SCORE_MEDIUM_MIN}-${SCORE_STRONG_MIN - 1}`}, Stretch {`<= ${SCORE_MEDIUM_MIN - 1}`}
+                                    </div>
+                                  </div>
+                                </details>
                               </div>
                             </td>
                             <td>

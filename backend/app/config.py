@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     write_api_key: str = ""
 
     # Require X-API-Key for write and execute endpoints.
-    require_write_key: bool = True
+    require_write_key: bool = False
 
     # Default author for generated documents.
     generated_document_author: str = ""
@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     discovery_api_base_url: str = "http://127.0.0.1:8000"
     discovery_log_max_chars: int = 3000
     discovery_default_profile: str = "de"
+    discovery_runner_mode: str = "subprocess"
 
     # Workspace-relative path root used by document generation and file editing.
     applications_root: str = "applications"

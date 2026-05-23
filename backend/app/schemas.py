@@ -1,4 +1,12 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class ScoreBreakdownOut(BaseModel):
+    score: int | None = None
+    fit: str = ""
+    matched_keywords: list[str] = []
+    missing_skills: list[str] = []
+    fit_notes: str = ""
 
 
 class JobApplicationOut(BaseModel):
@@ -25,6 +33,7 @@ class JobApplicationOut(BaseModel):
     listing_fingerprint: str
     change_note: str
     notes: str
+    score_breakdown: ScoreBreakdownOut | None = None
 
     model_config = {"from_attributes": True}
 
@@ -49,13 +58,13 @@ class JobApplicationUpsert(BaseModel):
     selected: str = "no"
     date_found: str = ""
     date_applied: str = ""
-    company: str
-    role: str
+    company: str = Field(min_length=1, max_length=255)
+    role: str = Field(min_length=1, max_length=255)
     location: str = ""
     source: str = ""
     remote_type: str = ""
     fit: str = ""
-    fit_score: int = 0
+    fit_score: int = Field(default=0, ge=0, le=100)
     link: str = ""
     status: str = ""
     next_step: str = ""
@@ -95,18 +104,30 @@ class StatsOut(BaseModel):
 
 
 class DiscoveryRunRequest(BaseModel):
-    limit: int = 40
-    min_score: int = 7
-    max_age_days: int = 45
+    limit: int = Field(default=40, ge=1, le=500)
+    min_score: int = Field(default=7, ge=0, le=100)
+    max_age_days: int = Field(default=45, ge=1, le=3650)
     include_stretch: bool = False
     profile: str = "de"
-    salary_min_usd: int | None = None
+    salary_min_usd: int | None = Field(default=None, ge=0, le=10_000_000)
     timezones: list[str] | None = None
     seniority: str | None = None
     use_outcome_priors: bool = False
-    prior_lookback_days: int = 365
-    source_prior_weight: float = 1.0
-    role_prior_weight: float = 1.0
+    prior_lookback_days: int = Field(default=365, ge=1, le=3650)
+    source_prior_weight: float = Field(default=1.0, ge=0.0, le=5.0)
+    role_prior_weight: float = Field(default=1.0, ge=0.0, le=5.0)
+    use_llm_reranker: bool = False
+    llm_top_n: int = Field(default=20, ge=1, le=200)
+    llm_weight: float = Field(default=1.0, ge=0.0, le=5.0)
+    llm_model: str | None = None
+    llm_api_base_url: str | None = None
+    llm_dry_run: bool = False
+    llm_max_calls: int = Field(default=20, ge=1, le=200)
+    llm_max_input_chars: int = Field(default=50000, ge=1000, le=1_000_000)
+    llm_max_retries: int = Field(default=2, ge=0, le=10)
+    llm_retry_backoff_seconds: float = Field(default=0.5, ge=0.0, le=30.0)
+    llm_timeout_seconds: int = Field(default=20, ge=1, le=180)
+    output_dir: str | None = None
     cv_path: str | None = None
     api_base_url: str | None = None
     verbose: bool = False

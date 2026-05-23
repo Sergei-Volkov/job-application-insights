@@ -8,12 +8,19 @@ __pycache__/
 node_modules/
 dist/
 .vite/
+frontend/tsconfig.tsbuildinfo
+frontend/coverage/
 
 # Runtime / secrets
 .env
 *.db
 db/
 backend/tests/.tmp/
+
+# Test / tooling artifacts
+.pytest_cache/
+.coverage
+coverage.xml
 
 # OS
 .DS_Store

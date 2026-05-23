@@ -1,5 +1,6 @@
 from datetime import datetime
 import hashlib
+import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, func
@@ -8,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..dependencies import get_db, require_write_access
 from ..models import JobApplication
-from ..schemas import JobApplicationOut, JobApplicationUpdate, JobApplicationUpsert
+from ..schemas import JobApplicationOut, JobApplicationUpdate, JobApplicationUpsert, ScoreBreakdownOut
 
 router = APIRouter(tags=["applications"])
 
@@ -24,6 +25,59 @@ def _listing_fingerprint(values: list[str]) -> str:
 
 def _today_iso() -> str:
     return datetime.now().strftime("%Y-%m-%d")
+
+
+def _score_breakdown_from_change_note(change_note: str) -> ScoreBreakdownOut | None:
+    raw = (change_note or "").strip()
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    return ScoreBreakdownOut(
+        score=payload.get("score") if isinstance(payload.get("score"), int) else None,
+        fit=str(payload.get("fit") or "").strip(),
+        matched_keywords=[str(part).strip() for part in payload.get("matched_keywords", []) if str(part).strip()]
+        if isinstance(payload.get("matched_keywords"), list)
+        else [],
+        missing_skills=[str(part).strip() for part in payload.get("missing_skills", []) if str(part).strip()]
+        if isinstance(payload.get("missing_skills"), list)
+        else [],
+        fit_notes=str(payload.get("fit_notes") or "").strip(),
+    )
+
+
+def _to_job_application_out(record: JobApplication) -> JobApplicationOut:
+    return JobApplicationOut(
+        id=record.id,
+        selected=record.selected,
+        date_found=record.date_found,
+        date_applied=record.date_applied,
+        company=record.company,
+        role=record.role,
+        location=record.location,
+        source=record.source,
+        remote_type=record.remote_type,
+        fit=record.fit,
+        fit_score=record.fit_score,
+        link=record.link,
+        status=record.status,
+        next_step=record.next_step,
+        follow_up_date=record.follow_up_date,
+        resume_ref=record.resume_ref,
+        cover_letter_ref=record.cover_letter_ref,
+        match_profile=record.match_profile,
+        first_seen_at=record.first_seen_at,
+        last_seen_at=record.last_seen_at,
+        listing_fingerprint=record.listing_fingerprint,
+        change_note=record.change_note,
+        notes=record.notes,
+        score_breakdown=_score_breakdown_from_change_note(record.change_note),
+    )
 
 
 def find_existing_application(db: Session, company: str, role: str, link: str) -> JobApplication | None:
@@ -66,7 +120,8 @@ def list_applications(
     if min_fit_score is not None:
         query = query.filter(JobApplication.fit_score >= min_fit_score)
 
-    return query.order_by(JobApplication.fit_score.desc(), JobApplication.id.asc()).offset(offset).limit(limit).all()
+    rows = query.order_by(JobApplication.fit_score.desc(), JobApplication.id.asc()).offset(offset).limit(limit).all()
+    return [_to_job_application_out(row) for row in rows]
 
 
 @router.post(
@@ -114,7 +169,7 @@ def create_application(
         raise HTTPException(status_code=409, detail="Application already exists")
 
     db.refresh(record)
-    return record
+    return _to_job_application_out(record)
 
 
 @router.post(
@@ -190,7 +245,7 @@ def upsert_application(
             raise HTTPException(status_code=500, detail="Failed to update existing application") from exc
 
     db.refresh(record)
-    return record
+    return _to_job_application_out(record)
 
 
 @router.patch(
@@ -212,6 +267,14 @@ def patch_application(
     for field, value in updates.items():
         setattr(record, field, value)
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Conflict while updating application") from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to update application") from exc
+
     db.refresh(record)
-    return record
+    return _to_job_application_out(record)
