@@ -6,7 +6,13 @@ FastAPI + React dashboard for tracking job applications, running discovery, and 
 
 ## Linked Submodule
 - `job-discovery-engine/` is a git submodule linked to `https://github.com/Sergei-Volkov/job-discovery-engine`.
-- After cloning this repo, initialize/update submodules:
+- Preferred clone command (fetches submodules immediately):
+
+```bash
+git clone --recurse-submodules https://github.com/Sergei-Volkov/job-application-insights
+```
+
+- If you already cloned without submodules, initialize/update them with:
 
 ```bash
 git submodule update --init --recursive
@@ -103,7 +109,8 @@ cd .. && python discovery/cli.py --help
 Discovery contract and caveats:
 - Canonical discovery contract lives in `job-discovery-engine` (`API_CONTRACT.md`).
 - `discovery/cli.py` in this repo is only a thin compatibility wrapper.
-- Local override config remains at `discovery/discovery_config.json` and can be enabled with `DISCOVERY_CONFIG_PATH`.
+- By default discovery uses package defaults from `job_discovery_engine`.
+- Optional local override: copy `discovery/discovery_config.override.example.json` to `discovery/discovery_config.override.json` and set `DISCOVERY_CONFIG_PATH`.
 - Discovery artifacts are written to `applications/tracker/`.
 
 ## Environment variables
@@ -116,7 +123,7 @@ Discovery contract and caveats:
 | `DISCOVERY_SCRIPT_PATH` | `discovery/cli.py` | Discovery script location |
 | `DISCOVERY_CV_PATH` | _(empty)_ | Fallback CV path for discovery runs |
 | `DISCOVERY_RUNNER_MODE` | `subprocess` | Discovery execution mode (`subprocess` or `module`) |
-| `DISCOVERY_CONFIG_PATH` | `discovery/discovery_config.json` | Optional discovery config override file |
+| `DISCOVERY_CONFIG_PATH` | _(empty)_ | Optional path to local discovery config override JSON |
 | `OPENAI_API_KEY` or `LLM_API_KEY` | _(empty)_ | Optional key for LLM reranker |
 | `LLM_API_BASE_URL` | `https://api.openai.com/v1` | Optional base URL for OpenAI-compatible reranker API |
 | `LLM_MODEL` | `gpt-4o-mini` | Default model used by LLM reranker |

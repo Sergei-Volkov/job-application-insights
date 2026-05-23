@@ -26,8 +26,8 @@ This file summarizes the app structure and points discovery readers to the froze
 
 ## Configuration
 - Main app env: `.env` / `.env.example`
-- Discovery behavior override config: `discovery/discovery_config.json`
-  - Override path via `DISCOVERY_CONFIG_PATH`
+- Discovery uses package defaults by default.
+- Optional local override path can be provided via `DISCOVERY_CONFIG_PATH`.
 
 ## Runtime flow
 1. Frontend triggers `POST /run-discovery`.

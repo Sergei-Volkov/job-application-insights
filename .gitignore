@@ -16,6 +16,7 @@ frontend/coverage/
 *.db
 db/
 backend/tests/.tmp/
+discovery/discovery_config.override.json
 
 # Test / tooling artifacts
 .pytest_cache/

@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "default_search_terms": [
+      "data engineer",
+      "analytics engineer"
+    ]
+  },
+  "scoring": {
+    "score_strong_min": 12,
+    "score_medium_min": 7
+  }
+}
