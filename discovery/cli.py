@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from job_discovery_engine.cli import main  # noqa: E402
 
 

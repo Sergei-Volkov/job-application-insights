@@ -122,7 +122,7 @@ Discovery contract and caveats:
 | `REQUIRE_WRITE_KEY` | `false` | Require `X-API-Key` when true |
 | `DISCOVERY_SCRIPT_PATH` | `discovery/cli.py` | Discovery script location |
 | `DISCOVERY_CV_PATH` | _(empty)_ | Fallback CV path for discovery runs |
-| `DISCOVERY_RUNNER_MODE` | `subprocess` | Discovery execution mode (`subprocess` or `module`) |
+| `DISCOVERY_RUNNER_MODE` | `module` | Discovery execution mode (`module` or `subprocess`) |
 | `DISCOVERY_CONFIG_PATH` | _(empty)_ | Optional path to local discovery config override JSON |
 | `OPENAI_API_KEY` or `LLM_API_KEY` | _(empty)_ | Optional key for LLM reranker |
 | `LLM_API_BASE_URL` | `https://api.openai.com/v1` | Optional base URL for OpenAI-compatible reranker API |
@@ -132,9 +132,9 @@ Discovery contract and caveats:
 | `BASE_CV_TEMPLATE_PATH` | `resumes/CV.tex` | Base CV path relative to `APPLICATIONS_ROOT` (or absolute path) |
 
 ## Discovery Runner Modes
-- `subprocess`:
-	- Backend executes `DISCOVERY_SCRIPT_PATH`.
-	- Most explicit path for debugging command args and logs.
 - `module`:
 	- Backend imports `job_discovery_engine` directly.
-	- Recommended once backend dependencies are installed and stable.
+	- Default and recommended mode.
+- `subprocess`:
+	- Backend executes `DISCOVERY_SCRIPT_PATH`.
+	- Keep for CLI-level debugging and compatibility.

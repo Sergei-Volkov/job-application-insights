@@ -41,6 +41,7 @@ os.environ["DISCOVERY_CV_PATH"] = str(_CV_PATH)
 os.environ["WRITE_API_KEY"] = "test-key"
 os.environ["REQUIRE_WRITE_KEY"] = "true"
 os.environ["DISCOVERY_LOG_MAX_CHARS"] = "80"
+os.environ["DISCOVERY_RUNNER_MODE"] = "subprocess"
 os.environ["APPLICATIONS_ROOT"] = str(_APPLICATIONS_ROOT)
 os.environ["VACANCIES_TEMPLATE_DIR"] = str(_TEMPLATE_DIR)
 os.environ["BASE_CV_TEMPLATE_PATH"] = str(_RESUMES_DIR / "CV.tex")
