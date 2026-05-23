@@ -9,7 +9,6 @@ services:
       - ../applications:/app/applications
     environment:
       DATABASE_URL: sqlite:///./app.db
-      DISCOVERY_SCRIPT_PATH: /app/discovery/cli.py
       DISCOVERY_CV_PATH: /app/applications/resumes/CV.tex
     env_file:
       - path: .env

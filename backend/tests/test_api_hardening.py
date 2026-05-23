@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 import shutil
 import sys
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -40,8 +41,6 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_DB_PATH.as_posix()}"
 os.environ["DISCOVERY_CV_PATH"] = str(_CV_PATH)
 os.environ["WRITE_API_KEY"] = "test-key"
 os.environ["REQUIRE_WRITE_KEY"] = "true"
-os.environ["DISCOVERY_LOG_MAX_CHARS"] = "80"
-os.environ["DISCOVERY_RUNNER_MODE"] = "subprocess"
 os.environ["APPLICATIONS_ROOT"] = str(_APPLICATIONS_ROOT)
 os.environ["VACANCIES_TEMPLATE_DIR"] = str(_TEMPLATE_DIR)
 os.environ["BASE_CV_TEMPLATE_PATH"] = str(_RESUMES_DIR / "CV.tex")
@@ -171,12 +170,24 @@ def test_run_discovery_output_is_summarized() -> None:
     _clear_db()
     _reset_discovery_guard()
 
-    class Completed:
-        returncode = 0
-        stdout = "A" * 600
-        stderr = "B" * 600
+    class FakeOptions:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
 
-    with patch("app.routers.discovery.subprocess.run", return_value=Completed()):
+    fake_result = SimpleNamespace(
+        strict_matches=[],
+        broad_matches=[],
+        llm_report=SimpleNamespace(dry_run=False, planned_calls=0, attempted=0, adjusted=0, used_input_chars=0),
+        synced_count=0,
+        failed_rows=[],
+    )
+    fake_warnings = SimpleNamespace(messages=[])
+    fake_module = SimpleNamespace(
+        DiscoveryRunOptions=FakeOptions,
+        run_discovery_pipeline=lambda options: (fake_result, fake_warnings),
+    )
+
+    with patch("app.routers.discovery.importlib.import_module", return_value=fake_module):
         response = client.post(
             "/run-discovery",
             json={"limit": 5, "min_score": 1, "max_age_days": 10, "include_stretch": False},
@@ -195,12 +206,24 @@ def test_run_discovery_verbose_output_is_summarized() -> None:
     _clear_db()
     _reset_discovery_guard()
 
-    class Completed:
-        returncode = 0
-        stdout = "A" * 600
-        stderr = "B" * 600
+    class FakeOptions:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
 
-    with patch("app.routers.discovery.subprocess.run", return_value=Completed()):
+    fake_result = SimpleNamespace(
+        strict_matches=[],
+        broad_matches=[],
+        llm_report=SimpleNamespace(dry_run=False, planned_calls=0, attempted=0, adjusted=0, used_input_chars=0),
+        synced_count=0,
+        failed_rows=[],
+    )
+    fake_warnings = SimpleNamespace(messages=[])
+    fake_module = SimpleNamespace(
+        DiscoveryRunOptions=FakeOptions,
+        run_discovery_pipeline=lambda options: (fake_result, fake_warnings),
+    )
+
+    with patch("app.routers.discovery.importlib.import_module", return_value=fake_module):
         response = client.post(
             "/run-discovery",
             json={
@@ -216,22 +239,35 @@ def test_run_discovery_verbose_output_is_summarized() -> None:
 
     assert response.status_code == 200
     data = response.json()
-    assert "output truncated" in data["stdout"]
-    assert "output truncated" in data["stderr"]
-    assert len(data["stdout"]) <= 80
-    assert len(data["stderr"]) <= 80
+    assert data["command"] == ["module:job_discovery_engine.run_discovery_pipeline"]
+    assert "strict_matches=0" in data["stdout"]
+    assert data["stderr"] == ""
 
 
 def test_run_discovery_forwards_profile_mode() -> None:
     _clear_db()
     _reset_discovery_guard()
 
-    class Completed:
-        returncode = 0
-        stdout = "ok"
-        stderr = ""
+    captured: dict[str, object] = {}
 
-    with patch("app.routers.discovery.subprocess.run", return_value=Completed()) as mocked:
+    class FakeOptions:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    fake_result = SimpleNamespace(
+        strict_matches=[],
+        broad_matches=[],
+        llm_report=SimpleNamespace(dry_run=True, planned_calls=2, attempted=0, adjusted=0, used_input_chars=0),
+        synced_count=0,
+        failed_rows=[],
+    )
+    fake_warnings = SimpleNamespace(messages=[])
+    fake_module = SimpleNamespace(
+        DiscoveryRunOptions=FakeOptions,
+        run_discovery_pipeline=lambda options: (fake_result, fake_warnings),
+    )
+
+    with patch("app.routers.discovery.importlib.import_module", return_value=fake_module):
         response = client.post(
             "/run-discovery",
             json={
@@ -260,55 +296,34 @@ def test_run_discovery_forwards_profile_mode() -> None:
                 "llm_max_retries": 3,
                 "llm_retry_backoff_seconds": 0.6,
                 "llm_timeout_seconds": 25,
-                "output_dir": "applications/tracker",
             },
             headers=_auth_headers(),
         )
 
     assert response.status_code == 200
-    command = mocked.call_args.kwargs["args"] if "args" in mocked.call_args.kwargs else mocked.call_args[0][0]
-    assert "--profile" in command
-    assert "swe" in command
-    assert "--api-base-url" in command
-    assert "http://127.0.0.1:8000" in command
-    assert "--max-age-days" in command
-    assert "10" in command
-    assert "--verbose" in command
-    assert "--salary-min-usd" in command
-    assert "120000" in command
-    assert "--timezones" in command
-    assert "UTC,CET" in command
-    assert "--seniority" in command
-    assert "senior" in command
-    assert "--use-outcome-priors" in command
-    assert "--prior-lookback-days" in command
-    assert "180" in command
-    assert "--source-prior-weight" in command
-    assert "1.4" in command
-    assert "--role-prior-weight" in command
-    assert "0.9" in command
-    assert "--use-llm-reranker" in command
-    assert "--llm-top-n" in command
-    assert "12" in command
-    assert "--llm-weight" in command
-    assert "0.8" in command
-    assert "--llm-model" in command
-    assert "gpt-4o-mini" in command
-    assert "--llm-api-base-url" in command
-    assert "https://api.openai.com/v1" in command
-    assert "--llm-dry-run" in command
-    assert "--llm-max-calls" in command
-    assert "9" in command
-    assert "--llm-max-input-chars" in command
-    assert "18000" in command
-    assert "--llm-max-retries" in command
-    assert "3" in command
-    assert "--llm-retry-backoff-seconds" in command
-    assert "0.6" in command
-    assert "--llm-timeout-seconds" in command
-    assert "25" in command
-    assert "--output-dir" in command
-    assert any(str(part).endswith("/applications/tracker") for part in command)
+    assert captured["profile"] == "swe"
+    assert captured["api_base_url"] == "http://127.0.0.1:8000"
+    assert captured["max_age_days"] == 10
+    assert captured["salary_min_usd"] == 120000
+    assert captured["timezones"] == ["UTC", "CET"]
+    assert captured["seniority"] == "senior"
+    assert captured["use_outcome_priors"] is True
+    assert captured["prior_lookback_days"] == 180
+    assert captured["source_prior_weight"] == 1.4
+    assert captured["role_prior_weight"] == 0.9
+    assert captured["use_llm_reranker"] is True
+    assert captured["llm_top_n"] == 12
+    assert captured["llm_weight"] == 0.8
+    assert captured["llm_model"] == "gpt-4o-mini"
+    assert captured["llm_api_base_url"] == "https://api.openai.com/v1"
+    assert captured["llm_dry_run"] is True
+    assert captured["llm_max_calls"] == 9
+    assert captured["llm_max_input_chars"] == 18000
+    assert captured["llm_max_retries"] == 3
+    assert captured["llm_retry_backoff_seconds"] == 0.6
+    assert captured["llm_timeout_seconds"] == 25
+    assert captured["sources"] is None
+    assert captured["output_dir"] is None
 
 
 def test_generate_documents_and_workspace_file_editing() -> None:
@@ -515,12 +530,7 @@ def test_run_discovery_failure_truncates_stderr() -> None:
     _clear_db()
     _reset_discovery_guard()
 
-    class Completed:
-        returncode = 1
-        stdout = "ok"
-        stderr = "Z" * 600
-
-    with patch("app.routers.discovery.subprocess.run", return_value=Completed()):
+    with patch("app.routers.discovery.importlib.import_module", side_effect=ImportError("missing package")):
         response = client.post(
             "/run-discovery",
             json={
@@ -535,20 +545,14 @@ def test_run_discovery_failure_truncates_stderr() -> None:
 
     assert response.status_code == 500
     detail = response.json()["detail"]
-    assert "Discovery script failed with exit code 1" in detail
-    assert "Enable verbose=true" in detail
+    assert "Discovery module package not found" in detail
 
 
 def test_run_discovery_verbose_failure_truncates_stderr() -> None:
     _clear_db()
     _reset_discovery_guard()
 
-    class Completed:
-        returncode = 1
-        stdout = "ok"
-        stderr = "Z" * 600
-
-    with patch("app.routers.discovery.subprocess.run", return_value=Completed()):
+    with patch("app.routers.discovery.importlib.import_module", side_effect=ImportError("missing package")):
         response = client.post(
             "/run-discovery",
             json={
@@ -564,19 +568,29 @@ def test_run_discovery_verbose_failure_truncates_stderr() -> None:
 
     assert response.status_code == 500
     detail = response.json()["detail"]
-    assert "Discovery script failed with exit code 1" in detail
-    assert "output truncated" in detail
-    assert len(detail) <= 500
+    assert "Discovery module package not found" in detail
 
 
 def test_run_discovery_rate_limit_blocks_immediate_repeat() -> None:
     _clear_db()
     _reset_discovery_guard()
 
-    class Completed:
-        returncode = 0
-        stdout = "ok"
-        stderr = ""
+    class FakeOptions:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+    fake_result = SimpleNamespace(
+        strict_matches=[],
+        broad_matches=[],
+        llm_report=SimpleNamespace(dry_run=False, planned_calls=0, attempted=0, adjusted=0, used_input_chars=0),
+        synced_count=0,
+        failed_rows=[],
+    )
+    fake_warnings = SimpleNamespace(messages=[])
+    fake_module = SimpleNamespace(
+        DiscoveryRunOptions=FakeOptions,
+        run_discovery_pipeline=lambda options: (fake_result, fake_warnings),
+    )
 
     payload = {
         "limit": 5,
@@ -586,7 +600,7 @@ def test_run_discovery_rate_limit_blocks_immediate_repeat() -> None:
         "api_base_url": "http://127.0.0.1:8000",
     }
 
-    with patch("app.routers.discovery.subprocess.run", return_value=Completed()):
+    with patch("app.routers.discovery.importlib.import_module", return_value=fake_module):
         first = client.post("/run-discovery", json=payload, headers=_auth_headers())
         second = client.post("/run-discovery", json=payload, headers=_auth_headers())
 

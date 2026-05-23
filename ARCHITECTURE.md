@@ -22,7 +22,6 @@ This file summarizes the app structure and points discovery readers to the froze
 ## Discovery
 - Discovery logic is owned by the external `job-discovery-engine` package.
 - This app should only consume discovery through that package boundary.
-- `discovery/cli.py` in this repo is a compatibility wrapper for subprocess mode.
 
 ## Configuration
 - Main app env: `.env` / `.env.example`
@@ -31,7 +30,7 @@ This file summarizes the app structure and points discovery readers to the froze
 
 ## Runtime flow
 1. Frontend triggers `POST /run-discovery`.
-2. Backend validates request and executes discovery via the extracted `job_discovery_engine` package (module mode) or the app wrapper `discovery/cli.py` (subprocess mode).
+2. Backend validates request and executes discovery via the extracted `job_discovery_engine` package.
 3. Discovery collects sources, scores, applies optional priors/LLM reranking.
 4. Discovery writes tracker artifacts and upserts shortlist rows via API.
 5. Frontend reloads applications and analytics.

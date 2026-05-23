@@ -1,6 +1,3 @@
-import os
-import subprocess
-import sys
 import threading
 import time
 import importlib
@@ -10,7 +7,6 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ..config import settings
 from ..dependencies import require_write_access
-from ..helpers import summarize_process_output
 from ..pathing import project_root, resolve_from_project_root, resolve_from_workspace_root, workspace_root
 from ..schemas import DiscoveryRunRequest, DiscoveryRunResult
 
@@ -157,75 +153,6 @@ def _run_discovery_module(
     )
 
 
-def _build_discovery_subprocess_command(
-    payload: DiscoveryRunRequest,
-    script_path: Path,
-    cv_path: Path,
-    profile: str,
-    seniority: str,
-    api_base_url: str,
-) -> list[str]:
-    command = [
-        sys.executable,
-        str(script_path),
-        "--cv-path",
-        str(cv_path),
-        "--limit",
-        str(payload.limit),
-        "--min-score",
-        str(payload.min_score),
-        "--max-age-days",
-        str(payload.max_age_days),
-        "--api-base-url",
-        api_base_url,
-        "--profile",
-        profile,
-    ]
-    if payload.include_stretch:
-        command.append("--include-stretch")
-    if payload.verbose:
-        command.append("--verbose")
-    if payload.salary_min_usd is not None:
-        command.extend(["--salary-min-usd", str(payload.salary_min_usd)])
-    if seniority:
-        command.extend(["--seniority", seniority])
-    if payload.timezones:
-        timezone_tokens = [tz.strip() for tz in payload.timezones if tz and tz.strip()]
-        if timezone_tokens:
-            command.extend(["--timezones", ",".join(timezone_tokens)])
-    requested_output_dir = (payload.output_dir or "").strip()
-    if requested_output_dir:
-        output_dir = resolve_from_workspace_root(requested_output_dir)
-        command.extend(["--output-dir", str(output_dir)])
-    if payload.use_outcome_priors:
-        command.append("--use-outcome-priors")
-        command.extend(["--prior-lookback-days", str(payload.prior_lookback_days)])
-        command.extend(["--source-prior-weight", str(payload.source_prior_weight)])
-        command.extend(["--role-prior-weight", str(payload.role_prior_weight)])
-    if payload.use_llm_reranker:
-        command.append("--use-llm-reranker")
-        command.extend(["--llm-top-n", str(payload.llm_top_n)])
-        command.extend(["--llm-weight", str(payload.llm_weight)])
-        if payload.llm_dry_run:
-            command.append("--llm-dry-run")
-        command.extend(["--llm-max-calls", str(payload.llm_max_calls)])
-        command.extend(["--llm-max-input-chars", str(payload.llm_max_input_chars)])
-        command.extend(["--llm-max-retries", str(payload.llm_max_retries)])
-        command.extend(["--llm-retry-backoff-seconds", str(payload.llm_retry_backoff_seconds)])
-        command.extend(["--llm-timeout-seconds", str(payload.llm_timeout_seconds)])
-        llm_model = (payload.llm_model or "").strip()
-        if llm_model:
-            command.extend(["--llm-model", llm_model])
-        llm_api_base_url = (payload.llm_api_base_url or "").strip()
-        if llm_api_base_url:
-            command.extend(["--llm-api-base-url", llm_api_base_url])
-    if payload.sources:
-        selected_sources = [src.strip().lower() for src in payload.sources if src and src.strip()]
-        if selected_sources:
-            command.extend(["--sources", ",".join(selected_sources)])
-    return command
-
-
 @router.post(
     "/run-discovery",
     response_model=DiscoveryRunResult,
@@ -272,70 +199,6 @@ def run_discovery(payload: DiscoveryRunRequest, _: None = Depends(require_write_
 
     _claim_discovery_slot()
     try:
-        # Module mode is the preferred path once discovery is installed from requirements.
-        runner_mode = (settings.discovery_runner_mode or "subprocess").strip().lower()
-        if runner_mode == "module":
-            return _run_discovery_module(payload, cv_path, profile, seniority, api_base_url)
-
-        script_path = resolve_from_project_root(settings.discovery_script_path)
-        if not script_path.exists():
-            raise HTTPException(status_code=500, detail=f"Discovery script not found: {script_path}")
-
-        command = _build_discovery_subprocess_command(
-            payload=payload,
-            script_path=script_path,
-            cv_path=cv_path,
-            profile=profile,
-            seniority=seniority,
-            api_base_url=api_base_url,
-        )
-
-        subprocess_env = {**os.environ}
-        if settings.write_api_key:
-            subprocess_env["JOB_SEARCH_WRITE_API_KEY"] = settings.write_api_key
-        completed = subprocess.run(
-            command,
-            cwd=str(script_path.parent.parent),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=300,
-            env=subprocess_env,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise HTTPException(status_code=504, detail=f"Discovery run timed out after {exc.timeout} seconds") from exc
+        return _run_discovery_module(payload, cv_path, profile, seniority, api_base_url)
     finally:
         _release_discovery_slot()
-
-    if completed.returncode != 0:
-        stderr = summarize_process_output(completed.stderr, settings.discovery_log_max_chars)
-        stderr = _sanitize_for_public_logs(stderr)
-        if not payload.verbose:
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    f"Discovery script failed with exit code {completed.returncode}. "
-                    "Enable verbose=true to inspect execution logs."
-                ),
-            )
-        raise HTTPException(
-            status_code=500,
-            detail=f"Discovery script failed with exit code {completed.returncode}. stderr: {stderr}",
-        )
-
-    if payload.verbose:
-        command_out = command
-        stdout_out = _sanitize_for_public_logs(summarize_process_output(completed.stdout, settings.discovery_log_max_chars))
-        stderr_out = _sanitize_for_public_logs(summarize_process_output(completed.stderr, settings.discovery_log_max_chars))
-    else:
-        command_out = []
-        stdout_out = "Discovery completed successfully. Enable verbose=true to inspect execution logs."
-        stderr_out = ""
-
-    return DiscoveryRunResult(
-        exit_code=completed.returncode,
-        command=command_out,
-        stdout=stdout_out,
-        stderr=stderr_out,
-    )

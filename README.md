@@ -108,7 +108,6 @@ cd .. && python discovery/cli.py --help
 
 Discovery contract and caveats:
 - Canonical discovery contract lives in `job-discovery-engine` (`API_CONTRACT.md`).
-- `discovery/cli.py` in this repo is only a thin compatibility wrapper.
 - By default discovery uses package defaults from `job_discovery_engine`.
 - Optional local override: copy `discovery/discovery_config.override.example.json` to `discovery/discovery_config.override.json` and set `DISCOVERY_CONFIG_PATH`.
 - Discovery artifacts are written to `applications/tracker/`.
@@ -120,9 +119,7 @@ Discovery contract and caveats:
 | `CORS_ORIGINS` | `[...]` | Allowed frontend origins |
 | `WRITE_API_KEY` | _(empty)_ | Optional key for write endpoints |
 | `REQUIRE_WRITE_KEY` | `false` | Require `X-API-Key` when true |
-| `DISCOVERY_SCRIPT_PATH` | `discovery/cli.py` | Discovery script location |
 | `DISCOVERY_CV_PATH` | _(empty)_ | Fallback CV path for discovery runs |
-| `DISCOVERY_RUNNER_MODE` | `module` | Discovery execution mode (`module` or `subprocess`) |
 | `DISCOVERY_CONFIG_PATH` | _(empty)_ | Optional path to local discovery config override JSON |
 | `OPENAI_API_KEY` or `LLM_API_KEY` | _(empty)_ | Optional key for LLM reranker |
 | `LLM_API_BASE_URL` | `https://api.openai.com/v1` | Optional base URL for OpenAI-compatible reranker API |
@@ -131,10 +128,6 @@ Discovery contract and caveats:
 | `VACANCIES_TEMPLATE_DIR` | `vacancies/_template` | Template dir relative to `APPLICATIONS_ROOT` (or absolute path) |
 | `BASE_CV_TEMPLATE_PATH` | `resumes/CV.tex` | Base CV path relative to `APPLICATIONS_ROOT` (or absolute path) |
 
-## Discovery Runner Modes
-- `module`:
-	- Backend imports `job_discovery_engine` directly.
-	- Default and recommended mode.
-- `subprocess`:
-	- Backend executes `DISCOVERY_SCRIPT_PATH`.
-	- Keep for CLI-level debugging and compatibility.
+## Discovery Runner
+- The app runs discovery in module mode only.
+- Backend imports `job_discovery_engine` directly and executes `run_discovery_pipeline`.
