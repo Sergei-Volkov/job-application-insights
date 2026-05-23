@@ -48,11 +48,13 @@ Notes:
 - `applications/` is mounted into the backend container for tracker and document files.
 
 ## Fast Setup (5-10 Minutes)
-1. Copy env: `cp .env.example .env`
-2. (Optional) set `WRITE_API_KEY` and `REQUIRE_WRITE_KEY=true` if you want write protection.
-3. Set `DISCOVERY_CV_PATH` in `.env` to your base CV, for example `applications/resumes/CV.tex`.
-4. Start app: `docker compose up --build`
-5. Open dashboard at `http://localhost:3000` and run discovery.
+1. Clone with submodule: `git clone --recurse-submodules https://github.com/Sergei-Volkov/job-application-insights`
+2. Enter app folder: `cd app`
+3. Copy env: `cp .env.example .env`
+4. Set `DISCOVERY_CV_PATH` in `.env` (for example `applications/resumes/CV.tex`).
+5. Optional write protection: set `WRITE_API_KEY=<your-key>` and `REQUIRE_WRITE_KEY=true`.
+6. Start app: `docker compose up --build`
+7. Open dashboard at `http://localhost:3000` and run discovery.
 
 Discovery engine dependency:
 - Discovery logic now lives in the linked `job-discovery-engine/` repo and is also installed as a pinned backend dependency.
@@ -72,6 +74,32 @@ python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload --r
 cd frontend
 npm install
 npm run dev
+```
+
+## Discovery request examples
+
+Minimal run (backend fallback values from `.env`):
+
+```bash
+curl -X POST http://127.0.0.1:8000/run-discovery \
+	-H "Content-Type: application/json" \
+	-H "X-API-Key: <WRITE_API_KEY>" \
+	-d '{"limit": 40, "min_score": 7, "max_age_days": 45, "include_stretch": false}'
+```
+
+Profile + reranker run:
+
+```bash
+curl -X POST http://127.0.0.1:8000/run-discovery \
+	-H "Content-Type: application/json" \
+	-H "X-API-Key: <WRITE_API_KEY>" \
+	-d '{
+		"profile": "swe",
+		"use_llm_reranker": true,
+		"llm_top_n": 12,
+		"llm_dry_run": true,
+		"verbose": true
+	}'
 ```
 
 ## Stability checklist
@@ -111,6 +139,12 @@ Discovery contract and caveats:
 - By default discovery uses package defaults from `job_discovery_engine`.
 - Optional local override: copy `discovery/discovery_config.override.example.json` to `discovery/discovery_config.override.json` and set `DISCOVERY_CONFIG_PATH`.
 - Discovery artifacts are written to `applications/tracker/`.
+
+## Common caveats
+- `POST /run-discovery` requires a valid CV path: either send `cv_path` in request or set `DISCOVERY_CV_PATH` in `.env`.
+- If `REQUIRE_WRITE_KEY=true`, write endpoints require `X-API-Key` header.
+- Discovery endpoint is intentionally rate-limited and single-flight to prevent duplicate runs from repeated clicks.
+- LLM reranker needs `OPENAI_API_KEY` or `LLM_API_KEY`; without keys use `llm_dry_run=true`.
 
 ## Environment variables
 | Variable | Default | Purpose |

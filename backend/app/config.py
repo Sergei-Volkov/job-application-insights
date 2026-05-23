@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     # Default author for generated documents.
     generated_document_author: str = ""
 
-    # Discovery script settings.
+    # Discovery runtime defaults used when request payload omits these values.
     discovery_cv_path: str = ""
     discovery_api_base_url: str = "http://127.0.0.1:8000"
     discovery_default_profile: str = "de"

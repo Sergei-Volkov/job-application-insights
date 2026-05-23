@@ -12,7 +12,10 @@ from ..schemas import DiscoveryRunRequest, DiscoveryRunResult
 
 router = APIRouter(tags=["imports"])
 
+# Guard endpoint load and prevent accidental duplicate runs from rapid UI retries.
 DISCOVERY_MIN_INTERVAL_SECONDS = 30.0
+ALLOWED_PROFILES = {"de", "swe", "other"}
+ALLOWED_SENIORITY = {"junior", "mid", "senior"}
 _discovery_guard_lock = threading.Lock()
 _discovery_in_flight = False
 _discovery_last_started_monotonic = 0.0
@@ -63,6 +66,55 @@ def _sanitize_for_public_logs(text: str) -> str:
         if raw:
             redacted = redacted.replace(raw, token)
     return redacted
+
+
+def _resolve_cv_path(payload: DiscoveryRunRequest) -> Path:
+    requested_cv_path = (payload.cv_path or "").strip()
+    if requested_cv_path:
+        cv_path = resolve_from_workspace_root(requested_cv_path)
+    elif settings.discovery_cv_path.strip():
+        cv_path = resolve_from_project_root(settings.discovery_cv_path)
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "CV path is missing. Provide cv_path in the /run-discovery request "
+                "or set DISCOVERY_CV_PATH in .env as a backend fallback."
+            ),
+        )
+
+    if not cv_path.exists() or not cv_path.is_file():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Discovery CV not found: {cv_path}. "
+                "Use an absolute path or a workspace-relative path like applications/resumes/CV.tex"
+            ),
+        )
+    return cv_path
+
+
+def _normalize_profile(payload: DiscoveryRunRequest) -> str:
+    profile = (payload.profile or settings.discovery_default_profile or "de").strip().lower()
+    if profile not in ALLOWED_PROFILES:
+        raise HTTPException(status_code=400, detail="profile must be one of: de, swe, other")
+    return profile
+
+
+def _normalize_seniority(payload: DiscoveryRunRequest) -> str:
+    seniority = (payload.seniority or "").strip().lower()
+    if seniority and seniority not in ALLOWED_SENIORITY:
+        raise HTTPException(status_code=400, detail="seniority must be one of: junior, mid, senior")
+    return seniority
+
+
+def _resolve_api_base_url(payload: DiscoveryRunRequest) -> str:
+    api_base_url = (payload.api_base_url or settings.discovery_api_base_url or "").strip()
+    if not api_base_url:
+        raise HTTPException(status_code=400, detail="api_base_url is missing")
+    if not (api_base_url.startswith("http://") or api_base_url.startswith("https://")):
+        raise HTTPException(status_code=400, detail="api_base_url must start with http:// or https://")
+    return api_base_url
 
 
 def _run_discovery_module(
@@ -156,46 +208,14 @@ def _run_discovery_module(
 @router.post(
     "/run-discovery",
     response_model=DiscoveryRunResult,
-    summary="Trigger the external discovery script",
-    description="Runs the existing job finder script and lets it upsert discovered roles back into this API.",
+    summary="Run discovery pipeline",
+    description="Runs discovery through the installed job_discovery_engine package and upserts shortlisted roles.",
 )
 def run_discovery(payload: DiscoveryRunRequest, _: None = Depends(require_write_access)) -> DiscoveryRunResult:
-    requested_cv_path = (payload.cv_path or "").strip()
-    if requested_cv_path:
-        cv_path = resolve_from_workspace_root(requested_cv_path)
-    elif settings.discovery_cv_path.strip():
-        cv_path = resolve_from_project_root(settings.discovery_cv_path)
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "CV path is missing. Provide cv_path in the /run-discovery request "
-                "or set DISCOVERY_CV_PATH in .env as a backend fallback."
-            ),
-        )
-
-    if not cv_path.exists() or not cv_path.is_file():
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Discovery CV not found: {cv_path}. "
-                "Use an absolute path or a workspace-relative path like applications/resumes/CV.tex"
-            ),
-        )
-
-    profile = (payload.profile or settings.discovery_default_profile or "de").strip().lower()
-    if profile not in {"de", "swe", "other"}:
-        raise HTTPException(status_code=400, detail="profile must be one of: de, swe, other")
-
-    seniority = (payload.seniority or "").strip().lower()
-    if seniority and seniority not in {"junior", "mid", "senior"}:
-        raise HTTPException(status_code=400, detail="seniority must be one of: junior, mid, senior")
-
-    api_base_url = (payload.api_base_url or settings.discovery_api_base_url or "").strip()
-    if not api_base_url:
-        raise HTTPException(status_code=400, detail="api_base_url is missing")
-    if not (api_base_url.startswith("http://") or api_base_url.startswith("https://")):
-        raise HTTPException(status_code=400, detail="api_base_url must start with http:// or https://")
+    cv_path = _resolve_cv_path(payload)
+    profile = _normalize_profile(payload)
+    seniority = _normalize_seniority(payload)
+    api_base_url = _resolve_api_base_url(payload)
 
     _claim_discovery_slot()
     try:
