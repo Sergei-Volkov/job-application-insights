@@ -28,6 +28,12 @@ This file summarizes the app structure and points discovery readers to the froze
 - Discovery uses package defaults by default.
 - Optional local override path can be provided via `DISCOVERY_CONFIG_PATH`.
 
+## Setup quick map
+1. Copy `.env.example` to `.env`.
+2. Set `DISCOVERY_CV_PATH` so discovery can infer owned skills.
+3. Optionally enable write-key protection (`WRITE_API_KEY`, `REQUIRE_WRITE_KEY=true`).
+4. Start with `docker compose up --build`.
+
 ## Runtime flow
 1. Frontend triggers `POST /run-discovery`.
 2. Backend validates request and executes discovery via the extracted `job_discovery_engine` package.
@@ -40,3 +46,8 @@ This file summarizes the app structure and points discovery readers to the froze
 - Prefer additive schema changes to keep old rows and payloads compatible.
 - Run backend tests and frontend tests/build on every structural change.
 - Avoid adding app-specific discovery details here; use the contract and extraction docs instead.
+
+## Runtime caveats
+- Discovery endpoint is single-flight and rate-limited to prevent accidental duplicate executions.
+- Discovery logs are sanitized before returning verbose output.
+- Missing or invalid CV path fails fast with a 400 response to avoid partial runs.
