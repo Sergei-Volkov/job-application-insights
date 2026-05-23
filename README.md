@@ -4,8 +4,13 @@
 
 FastAPI + React dashboard for tracking job applications, running discovery, and generating vacancy-specific documents.
 
-## Related Repositories
-- Discovery engine: https://github.com/Sergei-Volkov/job-discovery-engine
+## Linked Submodule
+- `job-discovery-engine/` is a git submodule linked to `https://github.com/Sergei-Volkov/job-discovery-engine`.
+- After cloning this repo, initialize/update submodules:
+
+```bash
+git submodule update --init --recursive
+```
 
 ## What This App Does
 - Tracks applications in a single dashboard.
@@ -44,7 +49,7 @@ Notes:
 5. Open dashboard at `http://localhost:3000` and run discovery.
 
 Discovery engine dependency:
-- Discovery logic now lives in a separate repo/package: `https://github.com/Sergei-Volkov/job-discovery-engine`.
+- Discovery logic now lives in the linked `job-discovery-engine/` repo and is also installed as a pinned backend dependency.
 - Backend installs it from `backend/requirements.txt` (pinned release).
 
 ## Run locally

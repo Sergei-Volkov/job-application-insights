@@ -1,0 +1,3 @@
+[submodule "job-discovery-engine"]
+	path = job-discovery-engine
+	url = https://github.com/Sergei-Volkov/job-discovery-engine.git
