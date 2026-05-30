@@ -1,27 +1,12 @@
-from contextlib import asynccontextmanager
-from pathlib import Path
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import inspect
 
 from .config import settings
-from .database import engine
-from .init_db import init_db
-from .models import JobApplication
 from .routers.analytics import router as analytics_router
 from .routers.applications import router as applications_router
 from .routers.discovery import router as discovery_router
 from .routers.system import router as system_router
 from .routers.workspace import router as workspace_router
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    inspector = inspect(engine)
-    if not inspector.has_table(JobApplication.__tablename__):
-        init_db()
-    yield
 
 
 app = FastAPI(
@@ -39,7 +24,6 @@ app = FastAPI(
         {"name": "analytics", "description": "Aggregated views used by the dashboard."},
         {"name": "workspace", "description": "Generate and edit application documents in the workspace."},
     ],
-    lifespan=lifespan,
 )
 
 app.add_middleware(

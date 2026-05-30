@@ -43,8 +43,7 @@ docker compose up --build
 - API docs: http://localhost:8000/docs
 
 Notes:
-- The API initializes schema automatically only when the database/tables are missing.
-- Manual initialization is still available: `cd backend && python -m app.init_db`.
+- Initialize schema once before first run: `docker compose run --rm backend python -m app.init_db`.
 - `applications/` is mounted into the backend container for tracker and document files.
 
 ## Fast Setup (5-10 Minutes)
@@ -53,8 +52,9 @@ Notes:
 3. Copy env: `cp .env.example .env`
 4. Set `DISCOVERY_CV_PATH` in `.env` (for example `applications/resumes/CV.tex`).
 5. Optional write protection: set `WRITE_API_KEY=<your-key>` and `REQUIRE_WRITE_KEY=true`.
-6. Start app: `docker compose up --build`
-7. Open dashboard at `http://localhost:3000` and run discovery.
+6. Initialize DB once: `docker compose run --rm backend python -m app.init_db`
+7. Start app: `docker compose up --build`
+8. Open dashboard at `http://localhost:3000` and run discovery.
 
 Discovery engine dependency:
 - Discovery logic now lives in the linked `job-discovery-engine/` repo and is also installed as a pinned backend dependency.
@@ -66,7 +66,8 @@ Discovery engine dependency:
 # Backend
 cd backend
 pip install -r requirements.txt
-python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload --reload-include "*.py" --reload-include "*.md" --reload-include "*.tex" --reload-include ".env"
+python -m app.init_db
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload --reload-include "*.py" --reload-include "*.md" --reload-include "*.tex" --reload-include ".env"
 ```
 
 ```bash

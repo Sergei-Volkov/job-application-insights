@@ -6,6 +6,10 @@ on:
       - main
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   gitleaks:
     name: Secret Scan
@@ -70,7 +74,7 @@ jobs:
         run: npm ci
 
       - name: Run frontend tests
-        run: npm test
+        run: npm test -- --run
 
       - name: Build frontend
         run: npm run build

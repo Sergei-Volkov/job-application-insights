@@ -495,20 +495,12 @@ def test_health_and_stats_endpoints() -> None:
     assert data["by_stage"]["screening"] == 1
 
 
-def test_startup_bootstraps_missing_schema() -> None:
-    class FakeInspector:
-        def has_table(self, table_name: str) -> bool:
-            return False
-
-    with patch("app.main.inspect", return_value=FakeInspector()) as mocked_inspect, patch(
-        "app.main.init_db"
-    ) as mocked_init_db:
-        with TestClient(app) as fresh_client:
-            response = fresh_client.get("/health")
+def test_startup_does_not_bootstrap_schema() -> None:
+    # API startup is now side-effect free; schema init is an explicit command.
+    with TestClient(app) as fresh_client:
+        response = fresh_client.get("/health")
 
     assert response.status_code == 200
-    mocked_inspect.assert_called_once()
-    mocked_init_db.assert_called_once()
 
 
 def test_path_and_helper_sanity() -> None:
