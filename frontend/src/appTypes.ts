@@ -5,7 +5,7 @@ export type EditableRow = ApplicationItem & {
   generating?: boolean
 }
 
-export type DiscoveryProfile = 'de' | 'swe' | 'other'
+export type DiscoveryProfile = 'de' | 'swe' | 'sre' | 'other'
 
 export type ListingFilter = 'all' | 'updated' | 'new'
 

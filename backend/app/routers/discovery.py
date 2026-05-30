@@ -21,7 +21,7 @@ DISCOVERY_MIN_INTERVAL_SECONDS = 30.0
 # job-board source or LLM API stops responding), the slot is released after this
 # many seconds so subsequent requests are not blocked permanently.
 DISCOVERY_MAX_WALL_SECONDS = 15 * 60  # 15 minutes
-ALLOWED_PROFILES = {"de", "swe", "other"}
+ALLOWED_PROFILES = {"de", "swe", "sre", "other"}
 ALLOWED_SENIORITY = {"junior", "mid", "senior"}
 _discovery_guard_lock = threading.Lock()
 _discovery_in_flight = False

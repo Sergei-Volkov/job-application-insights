@@ -143,7 +143,7 @@ export interface DiscoveryRunPayload {
   min_score?: number
   max_age_days?: number
   include_stretch?: boolean
-  profile?: 'de' | 'swe' | 'other'
+  profile?: 'de' | 'swe' | 'sre' | 'other'
   salary_min_usd?: number
   timezones?: string[]
   seniority?: 'junior' | 'mid' | 'senior'

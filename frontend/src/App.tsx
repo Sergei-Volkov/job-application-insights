@@ -612,6 +612,7 @@ export default function App() {
                     <option value="all">All</option>
                     <option value="de">DE</option>
                     <option value="swe">SWE</option>
+                    <option value="sre">SRE</option>
                     <option value="other">Other</option>
                   </select>
                   <label htmlFor="analytics-listing-filter">Listing</label>
@@ -711,6 +712,7 @@ export default function App() {
                   >
                     <option value="de">DE</option>
                     <option value="swe">SWE</option>
+                    <option value="sre">SRE</option>
                     <option value="other">Other</option>
                   </select>
                   <label className="toolbar-label" htmlFor="discovery-limit">
@@ -1253,6 +1255,7 @@ export default function App() {
                     <option value="all">All</option>
                     <option value="de">DE</option>
                     <option value="swe">SWE</option>
+                    <option value="sre">SRE</option>
                     <option value="other">Other</option>
                   </select>
 

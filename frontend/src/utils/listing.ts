@@ -2,7 +2,7 @@ import type { DiscoveryProfile, EditableRow, ListingFilter } from '../appTypes'
 
 export const normalizedProfile = (row: EditableRow): DiscoveryProfile => {
   const value = (row.match_profile || '').trim().toLowerCase()
-  if (value === 'swe' || value === 'other') return value
+  if (value === 'swe' || value === 'sre' || value === 'other') return value
   return 'de'
 }
 
