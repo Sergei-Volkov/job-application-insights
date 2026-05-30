@@ -265,6 +265,9 @@ def delete_application(
     db.delete(record)
     db.commit()
 
+
+@router.patch(
+    "/applications/{application_id}",
     response_model=JobApplicationOut,
     summary="Patch editable fields on one application",
 )
