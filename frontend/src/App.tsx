@@ -138,9 +138,36 @@ export default function App() {
     )
   }
 
+  const [sortKey, setSortKey] = useState<'company' | 'fit_score' | 'status' | 'follow_up_date' | null>(null)
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+
+  const handleSortClick = (key: 'company' | 'fit_score' | 'status' | 'follow_up_date') => {
+    if (sortKey === key) {
+      setSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      setSortDir('asc')
+    }
+  }
+
   const filteredApplications = useMemo(() => {
-    return filterApplications(applications, profileFilter, listingFilter)
-  }, [applications, listingFilter, profileFilter])
+    const filtered = filterApplications(applications, profileFilter, listingFilter)
+    if (!sortKey) return filtered
+    return [...filtered].sort((a, b) => {
+      let av: string | number = ''
+      let bv: string | number = ''
+      if (sortKey === 'fit_score') {
+        av = a.fit_score ?? 0
+        bv = b.fit_score ?? 0
+      } else {
+        av = (a[sortKey] || '').toLowerCase()
+        bv = (b[sortKey] || '').toLowerCase()
+      }
+      if (av < bv) return sortDir === 'asc' ? -1 : 1
+      if (av > bv) return sortDir === 'asc' ? 1 : -1
+      return 0
+    })
+  }, [applications, listingFilter, profileFilter, sortDir, sortKey])
 
   const activeProcessRow = useMemo(
     () => applications.find((row) => row.id === activeProcessId) ?? null,
@@ -1092,9 +1119,27 @@ export default function App() {
                     <thead>
                       <tr>
                         <th>Applied</th>
-                        <th>Role</th>
-                        <th>Stage</th>
-                        <th>Due</th>
+                        <th
+                          className="sortable-th"
+                          onClick={() => handleSortClick('company')}
+                          title="Sort by company / role"
+                        >
+                          Role {sortKey === 'company' ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}
+                        </th>
+                        <th
+                          className="sortable-th"
+                          onClick={() => handleSortClick('status')}
+                          title="Sort by status"
+                        >
+                          Stage {sortKey === 'status' ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}
+                        </th>
+                        <th
+                          className="sortable-th"
+                          onClick={() => handleSortClick('follow_up_date')}
+                          title="Sort by follow-up date"
+                        >
+                          Due {sortKey === 'follow_up_date' ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}
+                        </th>
                         <th>Process</th>
                       </tr>
                     </thead>

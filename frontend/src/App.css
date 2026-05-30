@@ -291,6 +291,15 @@ header {
   cursor: default;
 }
 
+.sortable-th {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.sortable-th:hover {
+  background: var(--surface-raised, #f1f5f9);
+}
+
 .delete-btn {
   border: 1px solid #b91c1c;
   background: #fff;
