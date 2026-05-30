@@ -7,16 +7,29 @@ services:
       - "8000:8000"
     volumes:
       - ../applications:/app/applications
+      - db-data:/app/data
     environment:
-      DATABASE_URL: sqlite:///./app.db
+      DATABASE_URL: sqlite:////app/data/app.db
       DISCOVERY_CV_PATH: /app/applications/resumes/CV.tex
     env_file:
       - path: .env
         required: false
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   frontend:
     build: ./frontend
     ports:
       - "3000:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  db-data:
