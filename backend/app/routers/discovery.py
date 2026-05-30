@@ -1,19 +1,26 @@
+import concurrent.futures
+import ipaddress
 import threading
 import time
 import importlib
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..config import settings
 from ..dependencies import require_write_access
-from ..pathing import project_root, resolve_from_project_root, resolve_from_workspace_root, workspace_root
+from ..pathing import is_within_path, project_root, resolve_from_project_root, resolve_from_workspace_root, workspace_root
 from ..schemas import DiscoveryRunRequest, DiscoveryRunResult
 
 router = APIRouter(tags=["imports"])
 
 # Guard endpoint load and prevent accidental duplicate runs from rapid UI retries.
 DISCOVERY_MIN_INTERVAL_SECONDS = 30.0
+# Hard wall-clock ceiling for a single pipeline run.  If the run hangs (e.g. a
+# job-board source or LLM API stops responding), the slot is released after this
+# many seconds so subsequent requests are not blocked permanently.
+DISCOVERY_MAX_WALL_SECONDS = 15 * 60  # 15 minutes
 ALLOWED_PROFILES = {"de", "swe", "other"}
 ALLOWED_SENIORITY = {"junior", "mid", "senior"}
 _discovery_guard_lock = threading.Lock()
@@ -72,6 +79,11 @@ def _resolve_cv_path(payload: DiscoveryRunRequest) -> Path:
     requested_cv_path = (payload.cv_path or "").strip()
     if requested_cv_path:
         cv_path = resolve_from_workspace_root(requested_cv_path)
+        if not is_within_path(cv_path, workspace_root()):
+            raise HTTPException(
+                status_code=400,
+                detail="cv_path must be within the workspace root",
+            )
     elif settings.discovery_cv_path.strip():
         cv_path = resolve_from_project_root(settings.discovery_cv_path)
     else:
@@ -108,13 +120,65 @@ def _normalize_seniority(payload: DiscoveryRunRequest) -> str:
     return seniority
 
 
+def _check_api_base_url_ssrf(url: str) -> None:
+    """Reject private/reserved IP literals in api_base_url to prevent SSRF.
+
+    Only IP-literal hostnames are validated; hostname resolution would require
+    a DNS round-trip and is not performed here.  127.x.x.x (loopback) is
+    explicitly allowed because it is the legitimate default backend address.
+    """
+    try:
+        hostname = urlparse(url).hostname or ""
+        try:
+            ip = ipaddress.ip_address(hostname)
+        except ValueError:
+            return  # Not an IP literal — cannot validate without DNS resolution.
+        if ip.is_loopback:
+            return  # 127.0.0.1/::1 are the legitimate defaults.
+        if ip.is_link_local or ip.is_private or ip.is_reserved:
+            raise HTTPException(
+                status_code=400,
+                detail="api_base_url must not target a private or reserved address",
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # Best-effort; do not block on unexpected parse errors.
+
+
 def _resolve_api_base_url(payload: DiscoveryRunRequest) -> str:
     api_base_url = (payload.api_base_url or settings.discovery_api_base_url or "").strip()
     if not api_base_url:
         raise HTTPException(status_code=400, detail="api_base_url is missing")
     if not (api_base_url.startswith("http://") or api_base_url.startswith("https://")):
         raise HTTPException(status_code=400, detail="api_base_url must start with http:// or https://")
+    _check_api_base_url_ssrf(api_base_url)
     return api_base_url
+
+
+def _validate_llm_api_base_url(payload: DiscoveryRunRequest) -> str | None:
+    """Validate llm_api_base_url scheme and reject private/reserved IP literals."""
+    url = (payload.llm_api_base_url or "").strip() or None
+    if url is None:
+        return None
+    if not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(status_code=400, detail="llm_api_base_url must start with http:// or https://")
+    _check_api_base_url_ssrf(url)
+    return url
+
+
+def _resolve_output_dir(payload: DiscoveryRunRequest) -> Path | None:
+    """Resolve and validate output_dir, ensuring it stays within the workspace root."""
+    raw = (payload.output_dir or "").strip()
+    if not raw:
+        return None
+    candidate = resolve_from_workspace_root(raw)
+    if not is_within_path(candidate, workspace_root()):
+        raise HTTPException(
+            status_code=400,
+            detail="output_dir must be within the workspace root",
+        )
+    return candidate
 
 
 def _run_discovery_module(
@@ -161,7 +225,7 @@ def _run_discovery_module(
         llm_top_n=payload.llm_top_n,
         llm_weight=payload.llm_weight,
         llm_model=(payload.llm_model or "").strip() or None,
-        llm_api_base_url=(payload.llm_api_base_url or "").strip() or None,
+        llm_api_base_url=_validate_llm_api_base_url(payload),
         llm_dry_run=payload.llm_dry_run,
         llm_max_calls=payload.llm_max_calls,
         llm_max_input_chars=payload.llm_max_input_chars,
@@ -170,9 +234,45 @@ def _run_discovery_module(
         llm_timeout_seconds=payload.llm_timeout_seconds,
         api_base_url=api_base_url,
         api_write_key=settings.write_api_key,
-        output_dir=resolve_from_workspace_root(payload.output_dir.strip()) if (payload.output_dir or "").strip() else None,
+        output_dir=_resolve_output_dir(payload),
     )
-    run_result, run_warnings = runner(options)
+    run_warnings = None
+    # Wrap the runner so the guard slot is released from inside the thread.
+    # This covers both the normal path and the timeout path: when a 504 fires
+    # the executor thread keeps running in the background, and only releases
+    # the slot when it actually finishes — preventing a second run from racing
+    # against a still-in-progress pipeline.
+    slot_released_by_thread = threading.Event()
+
+    def _runner_with_slot_release() -> tuple[object, object]:
+        try:
+            return runner(options)
+        finally:
+            slot_released_by_thread.set()
+            _release_discovery_slot()
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        future = executor.submit(_runner_with_slot_release)
+        try:
+            run_result, run_warnings = future.result(timeout=DISCOVERY_MAX_WALL_SECONDS)
+        except concurrent.futures.TimeoutError:
+            raise HTTPException(
+                status_code=504,
+                detail=(
+                    f"Discovery timed out after {DISCOVERY_MAX_WALL_SECONDS}s. "
+                    "The pipeline may still be completing in the background."
+                ),
+            )
+    finally:
+        executor.shutdown(wait=False)
+        # If the thread finished before we get here the event is already set.
+        # If it timed out the thread holds the slot — do NOT release it again.
+        if not slot_released_by_thread.is_set():
+            pass  # background thread will release when done
+
+
+    assert run_warnings is not None
 
     if payload.verbose:
         stdout_lines = [
@@ -220,5 +320,11 @@ def run_discovery(payload: DiscoveryRunRequest, _: None = Depends(require_write_
     _claim_discovery_slot()
     try:
         return _run_discovery_module(payload, cv_path, profile, seniority, api_base_url)
-    finally:
+    except HTTPException as exc:
+        # 504 timeout: the background thread owns the slot — don't double-release.
+        if exc.status_code != 504:
+            _release_discovery_slot()
+        raise
+    except Exception:
         _release_discovery_slot()
+        raise
