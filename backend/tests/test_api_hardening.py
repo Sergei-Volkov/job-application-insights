@@ -510,6 +510,11 @@ def test_path_and_helper_sanity() -> None:
     assert safe_relative_path(_TEMPLATE_DIR, _APPLICATIONS_ROOT) == "vacancies/_template"
 
     assert slugify("  Foo bar!!  ") == "foo_bar"
+    assert slugify("") == "item"                           # empty → fallback
+    assert slugify("!!!") == "item"                        # only specials → fallback
+    assert slugify("héllo wörld") == "h_llo_w_rld"         # non-ASCII stripped
+    assert slugify("a" * 100, max_len=10) == "a" * 10      # truncated at max_len
+    assert slugify("AB--CD") == "ab_cd"                    # consecutive specials collapsed
     assert summarize_process_output("abc", 10) == "abc"
 
     truncated = summarize_process_output("A" * 600, 80)
@@ -619,3 +624,124 @@ def test_run_discovery_rejects_invalid_numeric_bounds() -> None:
     )
 
     assert response.status_code == 422
+
+
+def test_run_discovery_rejects_private_ip_api_base_url() -> None:
+    _clear_db()
+    _reset_discovery_guard()
+
+    for private_url in [
+        "http://169.254.169.254/latest/meta-data/",
+        "http://10.0.0.1:8000",
+        "http://192.168.1.100:8080",
+        "http://172.16.0.1/",
+    ]:
+        response = client.post(
+            "/run-discovery",
+            json={"limit": 5, "min_score": 1, "max_age_days": 10, "include_stretch": False, "api_base_url": private_url},
+            headers=_auth_headers(),
+        )
+        assert response.status_code == 400, f"Expected 400 for {private_url}, got {response.status_code}"
+        _reset_discovery_guard()
+
+
+def test_workspace_file_rejects_path_traversal() -> None:
+    """Explicit traversal sequence must be blocked regardless of target path."""
+    for traversal_path in [
+        "../../../../etc/passwd",
+        "../../../etc/shadow",
+        "applications/../../etc/passwd",
+    ]:
+        response = client.get("/workspace-file", params={"path": traversal_path}, headers=_auth_headers())
+        assert response.status_code == 400, f"Expected 400 for {traversal_path!r}, got {response.status_code}"
+
+
+def test_missing_skills_endpoint() -> None:
+    _clear_db()
+
+    client.post(
+        "/applications/upsert",
+        json=_base_payload(
+            company="SkillCo",
+            role="Data Engineer",
+            link="https://example.com/job/skills-1",
+            notes="Experience needed. Missing or adjacent tools: dbt, Trino, Terraform.",
+        ),
+        headers=_auth_headers(),
+    )
+    client.post(
+        "/applications/upsert",
+        json=_base_payload(
+            company="SkillCo2",
+            role="Analytics Engineer",
+            link="https://example.com/job/skills-2",
+            notes="Nice to have. Missing or adjacent tools: dbt, Spark.",
+        ),
+        headers=_auth_headers(),
+    )
+
+    response = client.get("/missing-skills")
+    assert response.status_code == 200
+    data = response.json()
+    items = {item["skill"]: item["count"] for item in data["items"]}
+    assert items.get("dbt") == 2
+    assert items.get("Trino") == 1
+    assert items.get("Spark") == 1
+
+
+def test_delete_application() -> None:
+    _clear_db()
+
+    created = client.post(
+        "/applications/upsert",
+        json=_base_payload(link="https://example.com/job/delete-me"),
+        headers=_auth_headers(),
+    )
+    assert created.status_code == 200
+    app_id = created.json()["id"]
+
+    # Requires write key
+    no_auth = client.delete(f"/applications/{app_id}")
+    assert no_auth.status_code == 401
+
+    # Happy path
+    deleted = client.delete(f"/applications/{app_id}", headers=_auth_headers())
+    assert deleted.status_code == 204
+
+    # Gone afterwards
+    listed = client.get("/applications?limit=50")
+    ids = [r["id"] for r in listed.json()]
+    assert app_id not in ids
+
+    # Second delete → 404
+    second = client.delete(f"/applications/{app_id}", headers=_auth_headers())
+    assert second.status_code == 404
+
+
+def test_trend_endpoint() -> None:
+    _clear_db()
+
+    client.post(
+        "/applications/upsert",
+        json=_base_payload(company="A", role="DE", link="https://example.com/job/trend-1", date_found="2026-05-01"),
+        headers=_auth_headers(),
+    )
+    client.post(
+        "/applications/upsert",
+        json=_base_payload(company="B", role="DE", link="https://example.com/job/trend-2", date_found="2026-05-02"),
+        headers=_auth_headers(),
+    )
+    client.post(
+        "/applications/upsert",
+        json=_base_payload(company="C", role="DE", link="https://example.com/job/trend-3", date_found="2026-05-15"),
+        headers=_auth_headers(),
+    )
+
+    response = client.get("/trend")
+    assert response.status_code == 200
+    data = response.json()
+    weeks = {item["week"]: item["count"] for item in data["items"]}
+    # 2026-05-01 and 2026-05-02 fall in ISO week 2026-W18
+    assert weeks.get("2026-W18") == 2
+    # 2026-05-15 falls in ISO week 2026-W20
+    assert weeks.get("2026-W20") == 1
