@@ -7,16 +7,6 @@ export const DISCOVERY_SOURCES = [
   { key: 'jobicy', label: 'Jobicy' },
 ] as const
 
-export const NEXT_STEP_CHIP_LABELS: Record<string, string> = {
-  'Review role requirements': 'Review',
-  'Tailor CV': 'Tailor CV',
-  'Write cover letter': 'Cover Letter',
-  'Submit application': 'Submit',
-  'Prepare for interview': 'Interview Prep',
-  'Follow up with recruiter': 'Follow-up',
-  'Wait for response': 'Waiting',
-}
-
 export const NEXT_STEP_OPTIONS = [
   'Review role requirements',
   'Tailor CV',

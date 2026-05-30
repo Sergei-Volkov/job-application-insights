@@ -61,22 +61,6 @@ async function toApiError(res: Response, path: string): Promise<ApiError> {
   return new ApiError(res.status, path, detail)
 }
 
-export interface Stats {
-  total_applications: number
-  by_status: Record<string, number>
-  by_stage: Record<string, number>
-}
-
-export interface SkillItem {
-  skill: string
-  count: number
-}
-
-export interface TrendItem {
-  week: string
-  count: number
-}
-
 export interface ScoreBreakdown {
   score: number | null
   fit: string
@@ -241,11 +225,6 @@ async function apiDelete(path: string): Promise<void> {
   if (!res.ok) throw await toApiError(res, path)
 }
 
-export const fetchStats = () => apiFetch<Stats>('/stats')
-export const fetchSkills = () =>
-  apiFetch<{ items: SkillItem[] }>('/missing-skills').then((d) => d.items)
-export const fetchTrend = () =>
-  apiFetch<{ items: TrendItem[] }>('/trend').then((d) => d.items)
 export const fetchApplications = (limit = 500) =>
   apiFetch<ApplicationItem[]>(`/applications?limit=${limit}`)
 export const updateApplication = (id: number, payload: ApplicationPatch) =>

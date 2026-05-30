@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
-import type { ApplicationItem, DiscoveryRunResult, SkillItem, Stats, TrendItem, GenerateDocumentsResult } from './api'
+import type { ApplicationItem, DiscoveryRunResult, GenerateDocumentsResult } from './api'
 
 vi.mock('recharts', () => {
   const passthrough = ({ children }: { children?: unknown }) => children
@@ -22,10 +22,7 @@ vi.mock('recharts', () => {
 const apiMocks = vi.hoisted(() => {
   return {
     fetchApplications: vi.fn(),
-    fetchSkills: vi.fn(),
     runDiscovery: vi.fn(),
-    fetchStats: vi.fn(),
-    fetchTrend: vi.fn(),
     updateApplication: vi.fn(),
     generateDocuments: vi.fn(),
     readWorkspaceFile: vi.fn(),
@@ -69,9 +66,6 @@ function makeRow(): ApplicationItem {
 
 describe('App tracker workflow', () => {
   it('supports generate, open, save, and mark applied flow', async () => {
-    const stats: Stats = { total_applications: 1, by_status: { 'to review': 1 }, by_stage: {} }
-    const skills: SkillItem[] = []
-    const trend: TrendItem[] = []
     const runResult: DiscoveryRunResult = { exit_code: 0, command: [], stdout: '', stderr: '' }
     const generated: GenerateDocumentsResult = {
       vacancy_dir: 'applications/vacancies/northwind_data_engineer',
@@ -81,9 +75,6 @@ describe('App tracker workflow', () => {
       notes_path: 'applications/vacancies/northwind_data_engineer/notes.md',
     }
 
-    apiMocks.fetchStats.mockResolvedValue(stats)
-    apiMocks.fetchSkills.mockResolvedValue(skills)
-    apiMocks.fetchTrend.mockResolvedValue(trend)
     apiMocks.fetchApplications.mockResolvedValue([makeRow()])
     apiMocks.runDiscovery.mockResolvedValue(runResult)
     apiMocks.generateDocuments.mockResolvedValue(generated)

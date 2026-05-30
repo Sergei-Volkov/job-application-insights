@@ -13,7 +13,7 @@ import {
   type DiscoveryRunResult,
   type ApplicationItem,
 } from './api'
-import { DISCOVERY_SOURCES, NEXT_STEP_CHIP_LABELS, NEXT_STEP_OPTIONS } from './appConstants'
+import { DISCOVERY_SOURCES, NEXT_STEP_OPTIONS } from './appConstants'
 import type { AppPage, DiscoveryProfile, EditableRow, GeneratedDocsMap, ListingFilter } from './appTypes'
 import { getRowDocLinks } from './utils/docs'
 import { filterApplications, isNewListing, isUpdatedListing, normalizedProfile } from './utils/listing'

@@ -109,7 +109,7 @@ def _resolve_cv_path(payload: DiscoveryRunRequest) -> Path:
 def _normalize_profile(payload: DiscoveryRunRequest) -> str:
     profile = (payload.profile or settings.discovery_default_profile or "de").strip().lower()
     if profile not in ALLOWED_PROFILES:
-        raise HTTPException(status_code=400, detail="profile must be one of: de, swe, other")
+        raise HTTPException(status_code=400, detail="profile must be one of: de, swe, sre, other")
     return profile
 
 
