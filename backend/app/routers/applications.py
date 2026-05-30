@@ -248,8 +248,23 @@ def upsert_application(
     return _to_job_application_out(record)
 
 
-@router.patch(
+@router.delete(
     "/applications/{application_id}",
+    status_code=204,
+    summary="Delete one application",
+    description="Permanently removes a tracked application. This action cannot be undone.",
+)
+def delete_application(
+    application_id: int,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_write_access),
+) -> None:
+    record = db.query(JobApplication).filter(JobApplication.id == application_id).first()
+    if record is None:
+        raise HTTPException(status_code=404, detail="Application not found")
+    db.delete(record)
+    db.commit()
+
     response_model=JobApplicationOut,
     summary="Patch editable fields on one application",
 )

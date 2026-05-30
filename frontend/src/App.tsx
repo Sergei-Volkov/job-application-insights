@@ -20,6 +20,8 @@ import {
   generateDocuments,
   readWorkspaceFile,
   updateApplication,
+  deleteApplication,
+  upsertApplication,
   writeWorkspaceFile,
   type GenerateDocumentsResult,
   type DiscoveryRunResult,
@@ -61,6 +63,7 @@ export default function App() {
   const [trend, setTrend] = useState<TrendItem[]>([])
   const [applications, setApplications] = useState<EditableRow[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [discovering, setDiscovering] = useState(false)
   const [discoveryResult, setDiscoveryResult] = useState<DiscoveryRunResult | null>(null)
@@ -301,6 +304,18 @@ export default function App() {
       setError(e instanceof Error ? e.message : 'Failed to save application')
     }
   }
+
+  const deleteRow = async (row: EditableRow) => {
+    if (!window.confirm(`Delete "${row.company} – ${row.role}"? This cannot be undone.`)) return
+    try {
+      await deleteApplication(row.id)
+      setApplications((prev) => prev.filter((r) => r.id !== row.id))
+      if (activeProcessId === row.id) setActiveProcessId(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to delete application')
+    }
+  }
+
 
   const isStandardNextStep = (value: string | undefined) => !!value && NEXT_STEP_OPTIONS.includes(value)
 
@@ -577,6 +592,7 @@ export default function App() {
       </header>
 
       {error && <div className="error-banner">{error}</div>}
+      {successMessage && <div className="success-banner">{successMessage}</div>}
 
       {loading ? (
         <p className="empty-state">Loading…</p>
@@ -1189,19 +1205,21 @@ export default function App() {
                     onClick={async () => {
                       if (manualJobForm.company.trim() && manualJobForm.role.trim()) {
                         try {
-                          await updateApplication(0, {
-                            company: manualJobForm.company,
-                            role: manualJobForm.role,
-                            link: manualJobForm.link,
+                          setError(null)
+                          setSuccessMessage(null)
+                          await upsertApplication({
+                            company: manualJobForm.company.trim(),
+                            role: manualJobForm.role.trim(),
+                            link: manualJobForm.link.trim() || undefined,
                             notes: manualJobForm.description,
                             status: 'To review',
                             match_profile: discoveryProfile,
                             source: 'manual',
-                          } as any)
+                          })
                           setManualJobForm({ company: '', role: '', link: '', description: '' })
                           setLoading(true)
                           loadDashboard()
-                          setError('Job added successfully')
+                          setSuccessMessage('Job added successfully')
                         } catch (e) {
                           setError(e instanceof Error ? e.message : 'Failed to add job')
                         }
@@ -1369,6 +1387,15 @@ export default function App() {
                                 }}
                               >
                                 Process
+                              </button>
+                              <button
+                                className="delete-btn"
+                                title="Permanently delete this application"
+                                disabled={!!row.saving}
+                                onClick={() => void deleteRow(row)}
+                                style={{ marginTop: '4px' }}
+                              >
+                                Delete
                               </button>
                             </td>
                           </tr>

@@ -128,6 +128,16 @@ export interface ApplicationPatch {
   notes?: string
 }
 
+export interface ApplicationUpsert {
+  company: string
+  role: string
+  link?: string
+  notes?: string
+  status?: string
+  match_profile?: string
+  source?: string
+}
+
 export interface DiscoveryRunPayload {
   limit?: number
   min_score?: number
@@ -223,6 +233,14 @@ async function apiPut<T>(path: string, payload: unknown): Promise<T> {
   return res.json() as Promise<T>
 }
 
+async function apiDelete(path: string): Promise<void> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'DELETE',
+    headers: writeHeaders(),
+  })
+  if (!res.ok) throw await toApiError(res, path)
+}
+
 export const fetchStats = () => apiFetch<Stats>('/stats')
 export const fetchSkills = () =>
   apiFetch<{ items: SkillItem[] }>('/missing-skills').then((d) => d.items)
@@ -232,6 +250,10 @@ export const fetchApplications = (limit = 500) =>
   apiFetch<ApplicationItem[]>(`/applications?limit=${limit}`)
 export const updateApplication = (id: number, payload: ApplicationPatch) =>
   apiPatch<ApplicationItem>(`/applications/${id}`, payload)
+export const deleteApplication = (id: number) =>
+  apiDelete(`/applications/${id}`)
+export const upsertApplication = (payload: ApplicationUpsert) =>
+  apiPost<ApplicationItem>('/applications/upsert', payload)
 export const runDiscovery = (payload: DiscoveryRunPayload) =>
   apiPost<DiscoveryRunResult>('/run-discovery', payload)
 export const generateDocuments = (id: number, payload: GenerateDocumentsPayload) =>
@@ -240,3 +262,4 @@ export const readWorkspaceFile = (path: string) =>
   apiFetch<WorkspaceFileResult>(`/workspace-file?path=${encodeURIComponent(path)}`)
 export const writeWorkspaceFile = (path: string, content: string) =>
   apiPut<WorkspaceFileResult>('/workspace-file', { path, content })
+

@@ -91,6 +91,16 @@ header {
   font-size: 0.9rem;
 }
 
+.success-banner {
+  background: #dcfce7;
+  border: 1px solid #4ade80;
+  border-radius: 8px;
+  color: #166534;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  font-size: 0.9rem;
+}
+
 .result-banner {
   background: #ecfeff;
   border: 1px solid #67e8f9;
@@ -278,6 +288,27 @@ header {
 
 .secondary-btn:disabled {
   opacity: 0.6;
+  cursor: default;
+}
+
+.delete-btn {
+  border: 1px solid #b91c1c;
+  background: #fff;
+  color: #b91c1c;
+  border-radius: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  display: block;
+  width: 100%;
+}
+
+.delete-btn:hover {
+  background: #fef2f2;
+}
+
+.delete-btn:disabled {
+  opacity: 0.5;
   cursor: default;
 }
 
