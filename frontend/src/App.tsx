@@ -1,22 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
-import {
   fetchApplications,
-  fetchSkills,
   runDiscovery,
   ApiError,
-  fetchStats,
-  fetchTrend,
   generateDocuments,
   readWorkspaceFile,
   updateApplication,
@@ -26,15 +12,13 @@ import {
   type GenerateDocumentsResult,
   type DiscoveryRunResult,
   type ApplicationItem,
-  type SkillItem,
-  type Stats,
-  type TrendItem,
 } from './api'
 import { DISCOVERY_SOURCES, NEXT_STEP_CHIP_LABELS, NEXT_STEP_OPTIONS } from './appConstants'
 import type { AppPage, DiscoveryProfile, EditableRow, GeneratedDocsMap, ListingFilter } from './appTypes'
 import { getRowDocLinks } from './utils/docs'
 import { filterApplications, isNewListing, isUpdatedListing, normalizedProfile } from './utils/listing'
 import { renderMarkdownPreview, renderTexPreview } from './utils/preview'
+import AnalyticsPage from './pages/AnalyticsPage'
 import './App.css'
 
 const SCORE_STRONG_MIN = 12
@@ -58,9 +42,6 @@ type LlmDryRunDiagnostics = {
 }
 
 export default function App() {
-  const [stats, setStats] = useState<Stats | null>(null)
-  const [skills, setSkills] = useState<SkillItem[]>([])
-  const [trend, setTrend] = useState<TrendItem[]>([])
   const [applications, setApplications] = useState<EditableRow[]>([])
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
@@ -101,8 +82,6 @@ export default function App() {
     llm_timeout_seconds: 20,
     output_dir: '',
   })
-  const [analyticsProfileFilter, setAnalyticsProfileFilter] = useState<'all' | DiscoveryProfile>('all')
-  const [analyticsListingFilter, setAnalyticsListingFilter] = useState<ListingFilter>('all')
   const [manualJobForm, setManualJobForm] = useState({ company: '', role: '', link: '', description: '' })
   const [discoveryCvPath, setDiscoveryCvPath] = useState<string>(() => localStorage.getItem('discoveryCvPath') || '')
   const [discoveryApiBaseUrl, setDiscoveryApiBaseUrl] = useState<string>(
@@ -125,11 +104,8 @@ export default function App() {
 
   const loadDashboard = () => {
     setError(null)
-    Promise.all([fetchStats(), fetchSkills(), fetchTrend(), fetchApplications()])
-      .then(([s, sk, t, a]) => {
-        setStats(s)
-        setSkills(sk)
-        setTrend(t)
+    Promise.all([fetchApplications()])
+      .then(([a]) => {
         setApplications(a)
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to load data'))
@@ -155,74 +131,6 @@ export default function App() {
   useEffect(() => {
     loadDashboard()
   }, [])
-
-  const analyticsFilteredApps = useMemo(() => {
-    return filterApplications(applications, analyticsProfileFilter, analyticsListingFilter)
-  }, [applications, analyticsListingFilter, analyticsProfileFilter])
-
-  const statusData = useMemo(() => {
-    const byStatus: Record<string, number> = {}
-    analyticsFilteredApps.forEach((row) => {
-      const status = row.status || 'To review'
-      byStatus[status] = (byStatus[status] || 0) + 1
-    })
-    return (Object.entries(byStatus) as [string, number][])
-      .sort((a, b) => b[1] - a[1])
-      .map(([name, count]) => ({ name, count }))
-  }, [analyticsFilteredApps])
-
-  const skillData = useMemo(() => {
-    const marker = 'missing or adjacent tools:'
-    const found: string[] = []
-    analyticsFilteredApps.forEach((row) => {
-      const text = (row.notes || '').trim()
-      const lower = text.toLowerCase()
-      if (!lower.includes(marker)) return
-      const idx = lower.indexOf(marker)
-      const raw = text.slice(idx + marker.length)
-      raw
-        .split(',')
-        .map((part) => part.trim().replace(/[.]+$/g, ''))
-        .filter(Boolean)
-        .forEach((part) => found.push(part))
-    })
-
-    if (found.length === 0) return [] as SkillItem[]
-
-    const counts: Record<string, number> = {}
-    found.forEach((skill) => {
-      counts[skill] = (counts[skill] || 0) + 1
-    })
-
-    return (Object.entries(counts) as [string, number][])
-      .sort((a, b) => b[1] - a[1])
-      .map(([skill, count]) => ({ skill, count }))
-  }, [analyticsFilteredApps])
-
-  const trendData = useMemo(() => {
-    const weekCounter: Record<string, number> = {}
-
-    const isoWeek = (value: string) => {
-      const date = new Date(value)
-      if (Number.isNaN(date.getTime())) return ''
-      const utcDate = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()))
-      const day = utcDate.getUTCDay() || 7
-      utcDate.setUTCDate(utcDate.getUTCDate() + 4 - day)
-      const yearStart = new Date(Date.UTC(utcDate.getUTCFullYear(), 0, 1))
-      const weekNo = Math.ceil((((utcDate.getTime() - yearStart.getTime()) / 86400000) + 1) / 7)
-      return `${utcDate.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`
-    }
-
-    analyticsFilteredApps.forEach((row) => {
-      const week = isoWeek((row.date_found || '').trim())
-      if (!week) return
-      weekCounter[week] = (weekCounter[week] || 0) + 1
-    })
-
-    return (Object.entries(weekCounter) as [string, number][])
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([week, count]) => ({ week, count }))
-  }, [analyticsFilteredApps])
 
   const patchLocal = (id: number, patch: Partial<EditableRow>) => {
     setApplications((prev: EditableRow[]) =>
@@ -599,100 +507,7 @@ export default function App() {
       ) : (
         <>
           {activePage === 'analytics' && (
-            <>
-              <section className="card">
-                <div className="filters-row">
-                  <label htmlFor="analytics-profile-filter">Match profile</label>
-                  <select
-                    id="analytics-profile-filter"
-                    className="text-input select-input compact-input"
-                    value={analyticsProfileFilter}
-                    onChange={(e) => setAnalyticsProfileFilter(e.target.value as 'all' | DiscoveryProfile)}
-                  >
-                    <option value="all">All</option>
-                    <option value="de">DE</option>
-                    <option value="swe">SWE</option>
-                    <option value="sre">SRE</option>
-                    <option value="other">Other</option>
-                  </select>
-                  <label htmlFor="analytics-listing-filter">Listing</label>
-                  <select
-                    id="analytics-listing-filter"
-                    className="text-input select-input compact-input"
-                    value={analyticsListingFilter}
-                    onChange={(e) => setAnalyticsListingFilter(e.target.value as ListingFilter)}
-                  >
-                    <option value="all">All</option>
-                    <option value="new">New</option>
-                    <option value="updated">Updated</option>
-                  </select>
-                </div>
-              </section>
-              <section className="grid top-grid">
-                <div className="card stat-card">
-                  <h2>Total Applications</h2>
-                  <p className="metric">{analyticsFilteredApps.length}</p>
-                </div>
-
-                <div className="card chart-card">
-                  <h2>By Status</h2>
-                  <ResponsiveContainer width="100%" height={180}>
-                    <BarChart data={statusData} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
-                      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                      <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                      <Tooltip />
-                      <Bar dataKey="count" fill="#0f766e" radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </section>
-
-              <section className="grid bottom-grid">
-                <div className="card chart-card">
-                  <h2>Skill Gaps</h2>
-                  {skillData.length === 0 ? (
-                    <p className="empty-state">No missing-skill markers in filtered rows.</p>
-                  ) : (
-                    <ResponsiveContainer width="100%" height={240}>
-                      <BarChart
-                        data={skillData}
-                        layout="vertical"
-                        margin={{ top: 4, right: 16, left: 0, bottom: 0 }}
-                      >
-                        <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} />
-                        <YAxis type="category" dataKey="skill" width={90} tick={{ fontSize: 11 }} />
-                        <Tooltip />
-                        <Bar dataKey="count" fill="#0369a1" radius={[0, 4, 4, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  )}
-                </div>
-
-                <div className="card chart-card">
-                  <h2>Weekly Trend</h2>
-                  {trendData.length === 0 ? (
-                    <p className="empty-state">No dated applications yet.</p>
-                  ) : (
-                    <ResponsiveContainer width="100%" height={240}>
-                      <LineChart data={trendData} margin={{ top: 4, right: 16, left: -16, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="week" tick={{ fontSize: 10 }} />
-                        <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                        <Tooltip />
-                        <Line
-                          type="monotone"
-                          dataKey="count"
-                          stroke="#0f766e"
-                          strokeWidth={2}
-                          dot={{ r: 4 }}
-                          activeDot={{ r: 6 }}
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  )}
-                </div>
-              </section>
-            </>
+            <AnalyticsPage applications={applications} />
           )}
 
           {activePage === 'discovery' && (
