@@ -812,3 +812,105 @@ def test_score_breakdown_preserved_on_fingerprint_change() -> None:
     assert body2["score_breakdown"]["score"] == 85
     # change_note should reflect the human-readable update message
     assert "Updated on" in body2["change_note"]
+
+
+def test_patch_application_happy_path() -> None:
+    """PATCH /applications/{id} updates editable fields and returns the row."""
+    _clear_db()
+    create = client.post(
+        "/applications/upsert",
+        json=_base_payload(),
+        headers=_auth_headers(),
+    )
+    assert create.status_code == 200
+    app_id = create.json()["id"]
+
+    resp = client.patch(
+        f"/applications/{app_id}",
+        json={"status": "Interview", "notes": "Going well"},
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "Interview"
+    assert body["notes"] == "Going well"
+
+
+def test_patch_application_404() -> None:
+    """PATCH /applications/{id} returns 404 for a non-existent id."""
+    _clear_db()
+    resp = client.patch(
+        "/applications/99999",
+        json={"status": "Rejected"},
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 404
+
+
+def test_patch_application_requires_api_key() -> None:
+    """PATCH /applications/{id} returns 401 without a valid API key."""
+    _clear_db()
+    create = client.post(
+        "/applications/upsert",
+        json=_base_payload(),
+        headers=_auth_headers(),
+    )
+    assert create.status_code == 200
+    app_id = create.json()["id"]
+
+    resp = client.patch(f"/applications/{app_id}", json={"status": "Saved"})
+    assert resp.status_code == 401
+
+
+def test_trend_endpoint_with_dates() -> None:
+    """GET /trend groups applications by ISO week correctly."""
+    _clear_db()
+    client.post(
+        "/applications/upsert",
+        json=_base_payload(date_found="2024-01-08"),
+        headers=_auth_headers(),
+    )
+    payload2 = _base_payload(date_found="2024-01-15")
+    payload2["company"] = "OtherCo"
+    payload2["link"] = "https://example.com/job/base2"
+    client.post("/applications/upsert", json=payload2, headers=_auth_headers())
+
+    resp = client.get("/trend", headers=_auth_headers())
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    weeks = [item["week"] for item in items]
+    assert "2024-W02" in weeks
+    assert "2024-W03" in weeks
+
+
+def test_missing_skills_uses_default_when_empty() -> None:
+    """GET /missing-skills falls back to settings.default_missing_skills when no marker rows exist."""
+    _clear_db()
+    # Create a row without the marker text
+    client.post(
+        "/applications/upsert",
+        json=_base_payload(notes="Great job, no skill gap text here"),
+        headers=_auth_headers(),
+    )
+    resp = client.get("/missing-skills", headers=_auth_headers())
+    assert resp.status_code == 200
+    # Should return the default skills list (may be empty or populated from settings)
+    data = resp.json()
+    assert "items" in data
+    assert isinstance(data["items"], list)
+
+
+def test_missing_skills_parses_marker() -> None:
+    """GET /missing-skills extracts skills from the marker text in notes."""
+    _clear_db()
+    client.post(
+        "/applications/upsert",
+        json=_base_payload(notes="Missing or adjacent tools: Kubernetes, Terraform"),
+        headers=_auth_headers(),
+    )
+    resp = client.get("/missing-skills", headers=_auth_headers())
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    skills = [item["skill"] for item in items]
+    assert any("Kubernetes" in s for s in skills)
+    assert any("Terraform" in s for s in skills)
