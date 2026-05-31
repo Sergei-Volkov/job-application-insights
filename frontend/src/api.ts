@@ -153,11 +153,23 @@ export interface DiscoveryRunPayload {
   sources?: string[]
 }
 
+export interface SourceRunResult {
+  key: string
+  label: string
+  collected: number
+  error: string
+}
+
 export interface DiscoveryRunResult {
   exit_code: number
   command: string[]
   stdout: string
   stderr: string
+  source_results: SourceRunResult[]
+  strict_count: number
+  broad_count: number
+  synced_count: number
+  failed_count: number
 }
 
 export interface GenerateDocumentsPayload {

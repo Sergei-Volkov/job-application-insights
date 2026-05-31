@@ -150,11 +150,23 @@ class DiscoveryRunRequest(BaseModel):
     sources: list[str] | None = None
 
 
+class SourceRunResult(BaseModel):
+    key: str
+    label: str
+    collected: int
+    error: str = ""
+
+
 class DiscoveryRunResult(BaseModel):
     exit_code: int
     command: list[str]
     stdout: str
     stderr: str
+    source_results: list[SourceRunResult] = []
+    strict_count: int = 0
+    broad_count: int = 0
+    synced_count: int = 0
+    failed_count: int = 0
 
 
 class GenerateDocumentsRequest(BaseModel):

@@ -30,6 +30,7 @@ def test_run_discovery_module_mode_uses_public_api(monkeypatch) -> None:
         llm_report=SimpleNamespace(dry_run=False, planned_calls=0, attempted=0, adjusted=0, used_input_chars=0),
         synced_count=0,
         failed_rows=[],
+        collection_report=SimpleNamespace(sources=[]),
     )
     fake_warnings = SimpleNamespace(messages=["module mode ok"])
 

@@ -180,6 +180,7 @@ def test_run_discovery_output_is_summarized() -> None:
         llm_report=SimpleNamespace(dry_run=False, planned_calls=0, attempted=0, adjusted=0, used_input_chars=0),
         synced_count=0,
         failed_rows=[],
+        collection_report=SimpleNamespace(sources=[]),
     )
     fake_warnings = SimpleNamespace(messages=[])
     fake_module = SimpleNamespace(
@@ -216,6 +217,7 @@ def test_run_discovery_verbose_output_is_summarized() -> None:
         llm_report=SimpleNamespace(dry_run=False, planned_calls=0, attempted=0, adjusted=0, used_input_chars=0),
         synced_count=0,
         failed_rows=[],
+        collection_report=SimpleNamespace(sources=[]),
     )
     fake_warnings = SimpleNamespace(messages=[])
     fake_module = SimpleNamespace(
@@ -260,6 +262,7 @@ def test_run_discovery_forwards_profile_mode() -> None:
         llm_report=SimpleNamespace(dry_run=True, planned_calls=2, attempted=0, adjusted=0, used_input_chars=0),
         synced_count=0,
         failed_rows=[],
+        collection_report=SimpleNamespace(sources=[]),
     )
     fake_warnings = SimpleNamespace(messages=[])
     fake_module = SimpleNamespace(
@@ -582,6 +585,7 @@ def test_run_discovery_rate_limit_blocks_immediate_repeat() -> None:
         llm_report=SimpleNamespace(dry_run=False, planned_calls=0, attempted=0, adjusted=0, used_input_chars=0),
         synced_count=0,
         failed_rows=[],
+        collection_report=SimpleNamespace(sources=[]),
     )
     fake_warnings = SimpleNamespace(messages=[])
     fake_module = SimpleNamespace(

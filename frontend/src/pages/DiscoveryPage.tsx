@@ -610,6 +610,43 @@ export default function DiscoveryPage({ setError, setSuccessMessage, setLoading,
         {discoveryResult && (
           <div className="result-banner">
             <strong>Discovery exit code:</strong> {discoveryResult.exit_code}
+            {(discoveryResult.strict_count > 0 || discoveryResult.broad_count > 0) && (
+              <p style={{ margin: '6px 0 0' }}>
+                Strong/Medium: <strong>{discoveryResult.strict_count}</strong> &nbsp;|&nbsp;
+                Broad: <strong>{discoveryResult.broad_count}</strong> &nbsp;|&nbsp;
+                Synced: <strong>{discoveryResult.synced_count}</strong>
+                {discoveryResult.failed_count > 0 && (
+                  <span style={{ color: 'var(--color-warn, #c07000)' }}>
+                    {' '}(⚠ {discoveryResult.failed_count} failed)
+                  </span>
+                )}
+              </p>
+            )}
+            {discoveryResult.source_results.length > 0 && (
+              <details style={{ marginTop: '8px' }}>
+                <summary className="muted-mini">Per-source breakdown ({discoveryResult.source_results.length} sources)</summary>
+                <table className="source-results-table" style={{ marginTop: '6px', borderCollapse: 'collapse', fontSize: '0.85em' }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: 'left', paddingRight: '16px' }}>Source</th>
+                      <th style={{ textAlign: 'right', paddingRight: '16px' }}>Collected</th>
+                      <th style={{ textAlign: 'left' }}>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {discoveryResult.source_results.map((sr) => (
+                      <tr key={sr.key}>
+                        <td style={{ paddingRight: '16px' }}>{sr.label}</td>
+                        <td style={{ textAlign: 'right', paddingRight: '16px' }}>{sr.collected}</td>
+                        <td style={{ color: sr.error ? 'var(--color-warn, #c07000)' : 'var(--color-ok, #2a8a2a)' }}>
+                          {sr.error ? `⚠ ${sr.error.slice(0, 80)}` : '✓'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </details>
+            )}
             {discoveryResult.stdout && <pre>{discoveryResult.stdout}</pre>}
             {discoveryResult.stderr && <pre>{discoveryResult.stderr}</pre>}
           </div>

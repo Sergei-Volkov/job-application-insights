@@ -115,6 +115,7 @@ def find_existing_application(db: Session, company: str, role: str, link: str) -
 )
 def list_applications(
     status: str | None = Query(default=None),
+    source: str | None = Query(default=None),
     min_fit_score: int | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0, le=100_000),
@@ -126,6 +127,10 @@ def list_applications(
         normalized = status.strip().lower()
         if normalized:
             query = query.filter(func.lower(JobApplication.status) == normalized)
+    if source:
+        normalized_source = source.strip().lower()
+        if normalized_source:
+            query = query.filter(func.lower(JobApplication.source) == normalized_source)
     if min_fit_score is not None:
         query = query.filter(JobApplication.fit_score >= min_fit_score)
 
@@ -169,8 +174,9 @@ def create_application(
             ]
         )
 
-    # Extract scoring JSON from change_note into dedicated column
-    if _is_scoring_json(payload_data.get("change_note", "")):
+    # Extract scoring JSON from change_note into dedicated column (backward compat only;
+    # new engine sends score_breakdown directly so only copy when not already provided)
+    if not payload_data.get("score_breakdown") and _is_scoring_json(payload_data.get("change_note", "")):
         payload_data["score_breakdown"] = payload_data["change_note"]
 
     record = JobApplication(**payload_data)
@@ -216,7 +222,8 @@ def upsert_application(
         )
 
     # Extract scoring JSON into dedicated column so it survives change_note overwrite
-    if _is_scoring_json(payload_data.get("change_note", "")):
+    # (backward compat: new engine sends score_breakdown directly)
+    if not payload_data.get("score_breakdown") and _is_scoring_json(payload_data.get("change_note", "")):
         payload_data["score_breakdown"] = payload_data["change_note"]
 
     record = find_existing_application(db, company=payload.company, role=payload.role, link=payload.link)

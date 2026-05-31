@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from ..config import settings
 from ..dependencies import require_write_access
 from ..pathing import is_within_path, project_root, resolve_from_project_root, resolve_from_workspace_root, workspace_root
-from ..schemas import DiscoveryRunRequest, DiscoveryRunResult, DiscoveryStatusOut
+from ..schemas import DiscoveryRunRequest, DiscoveryRunResult, DiscoveryStatusOut, SourceRunResult
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["imports"])
@@ -298,18 +298,36 @@ def _run_discovery_module(
             stdout_lines.append(f"- warnings={len(run_warnings.messages)}")
             stdout_lines.extend(run_warnings.messages[:5])
 
+        source_results = [
+            SourceRunResult(key=sr.key, label=sr.label, collected=sr.collected, error=sr.error or "")
+            for sr in run_result.collection_report.sources
+        ]
         return DiscoveryRunResult(
             exit_code=0,
             command=["module:job_discovery_engine.run_discovery_pipeline"],
             stdout=_sanitize_for_public_logs("\n".join(stdout_lines)),
             stderr="",
+            source_results=source_results,
+            strict_count=len(run_result.strict_matches),
+            broad_count=len(run_result.broad_matches),
+            synced_count=run_result.synced_count,
+            failed_count=len(run_result.failed_rows),
         )
 
+    source_results = [
+        SourceRunResult(key=sr.key, label=sr.label, collected=sr.collected, error=sr.error or "")
+        for sr in run_result.collection_report.sources
+    ]
     return DiscoveryRunResult(
         exit_code=0,
         command=[],
         stdout="Discovery completed successfully. Enable verbose=true to inspect execution logs.",
         stderr="",
+        source_results=source_results,
+        strict_count=len(run_result.strict_matches),
+        broad_count=len(run_result.broad_matches),
+        synced_count=run_result.synced_count,
+        failed_count=len(run_result.failed_rows),
     )
 
 
