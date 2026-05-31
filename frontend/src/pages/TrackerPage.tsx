@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
+import DOMPurify from 'dompurify'
 import {
   fetchApplications,
   generateDocuments,
@@ -692,7 +693,7 @@ export default function TrackerPage({ applications, setApplications, setError, s
                 <div className="preview-area" aria-label="Rendered preview">
                   <div
                     className="preview-content"
-                    dangerouslySetInnerHTML={{ __html: previewHtml }}
+                    dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(previewHtml) }}
                   />
                 </div>
               </div>

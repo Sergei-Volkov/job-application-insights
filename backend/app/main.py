@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import logging
 from typing import AsyncIterator
 
 from fastapi import FastAPI
@@ -13,8 +14,13 @@ from .routers.system import router as system_router
 from .routers.workspace import router as workspace_router
 
 
+logger = logging.getLogger(__name__)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    if not settings.write_api_key:
+        logger.warning("write_api_key is not set; write endpoints will reject all requests")
     init_db()
     yield
 
