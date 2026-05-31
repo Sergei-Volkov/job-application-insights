@@ -1,3 +1,5 @@
+from urllib.parse import urlparse
+
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -79,8 +81,11 @@ class JobApplicationUpsert(BaseModel):
     @field_validator("link")
     @classmethod
     def _validate_link(cls, v: str) -> str:
-        if v and not (v.startswith("http://") or v.startswith("https://")):
-            raise ValueError("link must be empty or start with http:// or https://")
+        if not v:
+            return v
+        parsed = urlparse(v)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError("link must be a valid http:// or https:// URL")
         return v
 
 

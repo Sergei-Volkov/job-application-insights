@@ -1,4 +1,3 @@
-from datetime import datetime
 import hashlib
 import json
 
@@ -8,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..dependencies import get_db, require_write_access
+from ..helpers import today_iso
 from ..models import JobApplication
 from ..schemas import JobApplicationOut, JobApplicationUpdate, JobApplicationUpsert, ScoreBreakdownOut
 
@@ -21,10 +21,6 @@ def _normalize_key(value: str | None) -> str:
 def _listing_fingerprint(values: list[str]) -> str:
     joined = "||".join((v or "").strip() for v in values)
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()
-
-
-def _today_iso() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
 
 
 def _parse_score_breakdown(text: str) -> ScoreBreakdownOut | None:
@@ -121,7 +117,7 @@ def list_applications(
     status: str | None = Query(default=None),
     min_fit_score: int | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
+    offset: int = Query(default=0, ge=0, le=100_000),
     db: Session = Depends(get_db),
 ) -> list[JobApplicationOut]:
     query = db.query(JobApplication)
@@ -154,7 +150,7 @@ def create_application(
         raise HTTPException(status_code=409, detail="Application already exists")
 
     payload_data = payload.model_dump()
-    today = _today_iso()
+    today = today_iso()
 
     if not payload_data.get("first_seen_at"):
         payload_data["first_seen_at"] = today
@@ -202,7 +198,7 @@ def upsert_application(
     _: None = Depends(require_write_access),
 ) -> JobApplicationOut:
     payload_data = payload.model_dump()
-    today = _today_iso()
+    today = today_iso()
 
     if not payload_data.get("last_seen_at"):
         payload_data["last_seen_at"] = today
@@ -260,6 +256,8 @@ def upsert_application(
         incoming_fingerprint = (payload_data.get("listing_fingerprint") or "").strip()
         if previous_fingerprint and incoming_fingerprint and previous_fingerprint != incoming_fingerprint:
             payload_data["change_note"] = f"Updated on {today}: listing details changed"
+        elif not payload_data.get("change_note"):
+            payload_data["change_note"] = record.change_note or ""
 
         # Preserve existing score_breakdown if incoming has none (mirrors main upsert path)
         if not payload_data.get("score_breakdown"):
