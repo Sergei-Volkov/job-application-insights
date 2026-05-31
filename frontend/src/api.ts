@@ -235,6 +235,15 @@ export const upsertApplication = (payload: ApplicationUpsert) =>
   apiPost<ApplicationItem>('/applications/upsert', payload)
 export const runDiscovery = (payload: DiscoveryRunPayload) =>
   apiPost<DiscoveryRunResult>('/run-discovery', payload)
+
+export type DiscoveryStatus = {
+  in_flight: boolean
+  elapsed_seconds: number | null
+  cooldown_seconds_remaining: number | null
+}
+
+export const fetchDiscoveryStatus = () =>
+  apiFetch<DiscoveryStatus>('/discovery/status')
 export const generateDocuments = (id: number, payload: GenerateDocumentsPayload) =>
   apiPost<GenerateDocumentsResult>(`/applications/${id}/generate-documents`, payload)
 export const readWorkspaceFile = (path: string) =>

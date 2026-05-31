@@ -745,3 +745,29 @@ def test_trend_endpoint() -> None:
     assert weeks.get("2026-W18") == 2
     # 2026-05-15 falls in ISO week 2026-W20
     assert weeks.get("2026-W20") == 1
+
+
+def test_discovery_status_idle() -> None:
+    _reset_discovery_guard()
+    response = client.get("/discovery/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["in_flight"] is False
+    assert data["elapsed_seconds"] is None
+
+
+def test_discovery_status_cooldown() -> None:
+    import time
+    from app.routers import discovery as dr
+    # Simulate a completed run that just finished
+    with dr._discovery_guard_lock:
+        dr._discovery_in_flight = False
+        dr._discovery_last_started_monotonic = time.monotonic()  # set to "just now"
+    response = client.get("/discovery/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["in_flight"] is False
+    # Cooldown should be close to DISCOVERY_MIN_INTERVAL_SECONDS
+    assert data["cooldown_seconds_remaining"] is not None
+    assert 0 < data["cooldown_seconds_remaining"] <= dr.DISCOVERY_MIN_INTERVAL_SECONDS
+    _reset_discovery_guard()

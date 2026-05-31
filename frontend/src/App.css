@@ -761,3 +761,7 @@ header {
   flex-wrap: wrap;
   margin-top: 4px;
 }
+
+.discovery-status-line {
+  margin: 6px 0 0;
+}

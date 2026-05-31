@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from ..config import settings
 from ..dependencies import require_write_access
 from ..pathing import is_within_path, project_root, resolve_from_project_root, resolve_from_workspace_root, workspace_root
-from ..schemas import DiscoveryRunRequest, DiscoveryRunResult
+from ..schemas import DiscoveryRunRequest, DiscoveryRunResult, DiscoveryStatusOut
 
 router = APIRouter(tags=["imports"])
 
@@ -302,6 +302,33 @@ def _run_discovery_module(
         command=[],
         stdout="Discovery completed successfully. Enable verbose=true to inspect execution logs.",
         stderr="",
+    )
+
+
+@router.get(
+    "/discovery/status",
+    response_model=DiscoveryStatusOut,
+    summary="Poll discovery run status",
+    description="Returns whether a discovery run is currently in flight and how many seconds it has been running.",
+    tags=["imports"],
+)
+def get_discovery_status() -> DiscoveryStatusOut:
+    now = time.monotonic()
+    with _discovery_guard_lock:
+        in_flight = _discovery_in_flight
+        last_started = _discovery_last_started_monotonic
+
+    elapsed = (now - last_started) if last_started > 0 and in_flight else None
+    cooldown_remaining: float | None = None
+    if not in_flight and last_started > 0:
+        remaining = DISCOVERY_MIN_INTERVAL_SECONDS - (now - last_started)
+        if remaining > 0:
+            cooldown_remaining = round(remaining, 1)
+
+    return DiscoveryStatusOut(
+        in_flight=in_flight,
+        elapsed_seconds=round(elapsed, 1) if elapsed is not None else None,
+        cooldown_seconds_remaining=cooldown_remaining,
     )
 
 

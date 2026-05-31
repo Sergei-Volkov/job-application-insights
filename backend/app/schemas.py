@@ -107,6 +107,12 @@ class StatsOut(BaseModel):
     by_stage: dict[str, int]
 
 
+class DiscoveryStatusOut(BaseModel):
+    in_flight: bool
+    elapsed_seconds: float | None = None
+    cooldown_seconds_remaining: float | None = None
+
+
 class DiscoveryRunRequest(BaseModel):
     limit: int = Field(default=40, ge=1, le=500)
     min_score: int = Field(default=7, ge=0, le=100)

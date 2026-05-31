@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   fetchApplications,
   runDiscovery,
+  fetchDiscoveryStatus,
   ApiError,
   generateDocuments,
   readWorkspaceFile,
@@ -9,6 +10,7 @@ import {
   deleteApplication,
   upsertApplication,
   writeWorkspaceFile,
+  type DiscoveryStatus,
   type GenerateDocumentsResult,
   type DiscoveryRunResult,
   type ApplicationItem,
@@ -113,6 +115,8 @@ export default function App() {
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null)
   const [cooldownSecsLeft, setCooldownSecsLeft] = useState(0)
+  const [discoveryStatus, setDiscoveryStatus] = useState<DiscoveryStatus | null>(null)
+  const discoveryPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const loadDashboard = (): Promise<void> => {
     setError(null)
@@ -169,6 +173,42 @@ export default function App() {
   useEffect(() => {
     loadDashboard()
   }, [])
+
+  // Poll /discovery/status every 5 s while a run is in flight.
+  // When the backend reports it is done, reload the dashboard.
+  useEffect(() => {
+    if (!discovering) {
+      if (discoveryPollRef.current !== null) {
+        clearInterval(discoveryPollRef.current)
+        discoveryPollRef.current = null
+      }
+      return
+    }
+
+    const poll = async () => {
+      try {
+        const status = await fetchDiscoveryStatus()
+        setDiscoveryStatus(status)
+        if (!status.in_flight) {
+          // Run finished on the backend side — reload dashboard
+          setLoading(true)
+          void loadDashboard()
+        }
+      } catch {
+        // Swallow poll errors silently; the main triggerDiscovery error path handles failures
+      }
+    }
+
+    void poll()
+    discoveryPollRef.current = setInterval(() => void poll(), 5000)
+    return () => {
+      if (discoveryPollRef.current !== null) {
+        clearInterval(discoveryPollRef.current)
+        discoveryPollRef.current = null
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [discovering])
 
   const patchLocal = (id: number, patch: Partial<EditableRow>) => {
     setApplications((prev: EditableRow[]) =>
@@ -490,6 +530,7 @@ export default function App() {
 
   const triggerDiscovery = async () => {
     setDiscovering(true)
+    setDiscoveryStatus(null)
     setError(null)
     try {
       const salaryMinUsd = discoveryParams.salary_min_usd.trim()
@@ -1010,6 +1051,13 @@ export default function App() {
                     {discovering ? 'Running...' : cooldownSecsLeft > 0 ? `Wait ${cooldownSecsLeft}s` : 'Run discovery'}
                   </button>
                 </div>
+                {discovering && discoveryStatus?.in_flight && (
+                  <p className="discovery-status-line muted-mini">
+                    {discoveryStatus.elapsed_seconds !== null
+                      ? `Running… ${discoveryStatus.elapsed_seconds}s elapsed`
+                      : 'Starting…'}
+                  </p>
+                )}
                 <div className="details-panel" style={{ marginTop: '10px' }}>
                   <strong className="muted-mini">Websites</strong>
                   <div className="process-actions">
