@@ -1,3 +1,6 @@
+export const SCORE_STRONG_MIN = 12
+export const SCORE_MEDIUM_MIN = 7
+
 export const DISCOVERY_SOURCES = [
   { key: 'wwr', label: 'We Work Remotely' },
   { key: 'working_nomads', label: 'Working Nomads' },
