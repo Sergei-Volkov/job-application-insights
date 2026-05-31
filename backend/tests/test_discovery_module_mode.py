@@ -11,6 +11,7 @@ for path in (str(_BACKEND_ROOT), str(_APP_ROOT)):
         sys.path.insert(0, path)
 
 from app.main import app  # noqa: E402
+from app.routers import discovery as _discovery_router  # noqa: E402
 
 client = TestClient(app)
 
@@ -20,6 +21,8 @@ def _auth_headers() -> dict[str, str]:
 
 
 def test_run_discovery_module_mode_uses_public_api(monkeypatch) -> None:
+    # Reset the guard so this test is not affected by cooldown left by other tests.
+    _discovery_router._reset_discovery_run_guard()
     class FakeOptions:
         def __init__(self, **kwargs: object) -> None:
             self.kwargs = kwargs

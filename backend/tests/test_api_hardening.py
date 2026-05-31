@@ -914,3 +914,157 @@ def test_missing_skills_parses_marker() -> None:
     skills = [item["skill"] for item in items]
     assert any("Kubernetes" in s for s in skills)
     assert any("Terraform" in s for s in skills)
+
+
+# ── Discovery router: auth, validation, concurrency, log sanitization ──────────
+
+
+def test_run_discovery_requires_write_key() -> None:
+    """POST /run-discovery must return 401 when the API key is absent."""
+    _reset_discovery_guard()
+    response = client.post(
+        "/run-discovery",
+        json={"limit": 5, "min_score": 1, "max_age_days": 10, "include_stretch": False},
+    )
+    assert response.status_code == 401
+
+
+def test_run_discovery_invalid_profile_returns_400() -> None:
+    """POST /run-discovery returns 400 for a profile value not in {de, swe, sre, other}."""
+    _reset_discovery_guard()
+    response = client.post(
+        "/run-discovery",
+        json={
+            "limit": 5,
+            "min_score": 1,
+            "max_age_days": 10,
+            "include_stretch": False,
+            "profile": "cto",
+        },
+        headers=_auth_headers(),
+    )
+    assert response.status_code == 400
+    assert "profile" in response.json()["detail"].lower()
+
+
+def test_run_discovery_cv_path_outside_workspace_returns_400() -> None:
+    """POST /run-discovery rejects cv_path values that escape the workspace root."""
+    _reset_discovery_guard()
+    response = client.post(
+        "/run-discovery",
+        json={
+            "limit": 5,
+            "min_score": 1,
+            "max_age_days": 10,
+            "include_stretch": False,
+            "cv_path": "/etc/passwd",
+        },
+        headers=_auth_headers(),
+    )
+    assert response.status_code == 400
+    assert "workspace" in response.json()["detail"].lower()
+
+
+def test_run_discovery_ssrf_rejects_private_ip() -> None:
+    """POST /run-discovery returns 400 when api_base_url targets a private IP."""
+    _reset_discovery_guard()
+    response = client.post(
+        "/run-discovery",
+        json={
+            "limit": 5,
+            "min_score": 1,
+            "max_age_days": 10,
+            "include_stretch": False,
+            "api_base_url": "http://192.168.1.1:8000",
+        },
+        headers=_auth_headers(),
+    )
+    assert response.status_code == 400
+    assert "private" in response.json()["detail"].lower()
+
+
+def test_run_discovery_ssrf_allows_loopback() -> None:
+    """Loopback api_base_url (127.0.0.1) is the legitimate default and must pass SSRF guard."""
+    _reset_discovery_guard()
+
+    class FakeOptions:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+    fake_result = SimpleNamespace(
+        strict_matches=[],
+        broad_matches=[],
+        llm_report=SimpleNamespace(dry_run=False, planned_calls=0, attempted=0, adjusted=0, used_input_chars=0),
+        synced_count=0,
+        failed_rows=[],
+        collection_report=SimpleNamespace(sources=[]),
+    )
+    fake_warnings = SimpleNamespace(messages=[])
+    fake_module = SimpleNamespace(
+        DiscoveryRunOptions=FakeOptions,
+        run_discovery_pipeline=lambda options: (fake_result, fake_warnings),
+    )
+
+    with patch("app.routers.discovery.importlib.import_module", return_value=fake_module):
+        response = client.post(
+            "/run-discovery",
+            json={
+                "limit": 5,
+                "min_score": 1,
+                "max_age_days": 10,
+                "include_stretch": False,
+                "api_base_url": "http://127.0.0.1:8000",
+            },
+            headers=_auth_headers(),
+        )
+    assert response.status_code == 200
+    # Reset so subsequent tests and other test files do not hit the cooldown.
+    _reset_discovery_guard()
+
+
+def test_sanitize_for_public_logs_redacts_workspace_path() -> None:
+    """_sanitize_for_public_logs replaces the workspace root path with <workspace>."""
+    from app.routers.discovery import _sanitize_for_public_logs
+    from app.pathing import workspace_root
+
+    root = str(workspace_root())
+    raw = f"CV not found at {root}/applications/resumes/CV.tex"
+    sanitized = _sanitize_for_public_logs(raw)
+    assert root not in sanitized
+    assert "<workspace>" in sanitized
+
+
+def test_claim_discovery_slot_rejects_concurrent_run() -> None:
+    """A second /run-discovery request returns 429 while a run is already in flight."""
+    _reset_discovery_guard()
+    from app.routers import discovery as dr
+
+    with dr._discovery_guard_lock:
+        dr._discovery_in_flight = True
+
+    try:
+        response = client.post(
+            "/run-discovery",
+            json={"limit": 5, "min_score": 1, "max_age_days": 10, "include_stretch": False},
+            headers=_auth_headers(),
+        )
+        assert response.status_code == 429
+        assert "in progress" in response.json()["detail"].lower()
+    finally:
+        _reset_discovery_guard()
+
+
+def test_run_discovery_module_import_error_returns_500() -> None:
+    """POST /run-discovery returns 500 when the job_discovery_engine package is missing."""
+    _reset_discovery_guard()
+    with patch(
+        "app.routers.discovery.importlib.import_module",
+        side_effect=ImportError("No module named 'job_discovery_engine'"),
+    ):
+        response = client.post(
+            "/run-discovery",
+            json={"limit": 5, "min_score": 1, "max_age_days": 10, "include_stretch": False},
+            headers=_auth_headers(),
+        )
+    assert response.status_code == 500
+    assert "Discovery module" in response.json()["detail"]
