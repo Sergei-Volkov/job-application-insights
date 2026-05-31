@@ -560,6 +560,16 @@ export default function DiscoveryPage({ setError, setSuccessMessage, setLoading,
           <button className="save-btn" disabled={discovering || cooldownSecsLeft > 0} onClick={() => void triggerDiscovery()}>
             {discovering ? 'Running...' : cooldownSecsLeft > 0 ? `Wait ${cooldownSecsLeft}s` : 'Run discovery'}
           </button>
+          <button
+            className="secondary-btn"
+            title="Reset all discovery parameters to defaults"
+            onClick={() => {
+              setDiscoveryParams(DEFAULT_DISCOVERY_PARAMS)
+              localStorage.removeItem('discoveryParams')
+            }}
+          >
+            Reset
+          </button>
         </div>
         {discovering && discoveryStatus?.in_flight && (
           <p className="discovery-status-line muted-mini">

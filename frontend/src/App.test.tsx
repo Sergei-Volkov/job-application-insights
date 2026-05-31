@@ -10,6 +10,7 @@ vi.mock('recharts', () => {
     Bar: passthrough,
     BarChart: passthrough,
     CartesianGrid: passthrough,
+    Legend: passthrough,
     Line: passthrough,
     LineChart: passthrough,
     ResponsiveContainer: passthrough,

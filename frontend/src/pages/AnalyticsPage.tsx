@@ -3,6 +3,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Legend,
   Line,
   LineChart,
   ResponsiveContainer,
@@ -127,6 +128,7 @@ export default function AnalyticsPage({ applications }: Props) {
               <XAxis dataKey="name" tick={{ fontSize: 11 }} />
               <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
               <Tooltip />
+              <Legend />
               <Bar dataKey="count" fill="#0f766e" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
@@ -148,6 +150,7 @@ export default function AnalyticsPage({ applications }: Props) {
                 <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} />
                 <YAxis type="category" dataKey="skill" width={90} tick={{ fontSize: 11 }} />
                 <Tooltip />
+                <Legend />
                 <Bar dataKey="count" fill="#0369a1" radius={[0, 4, 4, 0]} />
               </BarChart>
             </ResponsiveContainer>
@@ -165,6 +168,7 @@ export default function AnalyticsPage({ applications }: Props) {
                 <XAxis dataKey="week" tick={{ fontSize: 10 }} />
                 <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
                 <Tooltip />
+                <Legend />
                 <Line
                   type="monotone"
                   dataKey="count"
