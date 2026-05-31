@@ -237,8 +237,8 @@ async function apiDelete(path: string): Promise<void> {
   if (!res.ok) throw await toApiError(res, path)
 }
 
-export const fetchApplications = (limit = 500) =>
-  apiFetch<ApplicationItem[]>(`/applications?limit=${limit}`)
+export const fetchApplications = (limit = 50, offset = 0) =>
+  apiFetch<ApplicationItem[]>(`/applications?limit=${limit}&offset=${offset}`)
 export const updateApplication = (id: number, payload: ApplicationPatch) =>
   apiPatch<ApplicationItem>(`/applications/${id}`, payload)
 export const deleteApplication = (id: number) =>
