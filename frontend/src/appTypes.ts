@@ -3,6 +3,7 @@ import type { ApplicationItem, GenerateDocumentsResult } from './api'
 export type EditableRow = ApplicationItem & {
   saving?: boolean
   generating?: boolean
+  rowError?: string | null
 }
 
 export type DiscoveryProfile = 'de' | 'swe' | 'sre' | 'other'

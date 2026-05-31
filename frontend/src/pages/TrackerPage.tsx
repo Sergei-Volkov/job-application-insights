@@ -179,7 +179,8 @@ export default function TrackerPage({ applications, setApplications, setError, s
   }
 
   const saveRow = async (row: EditableRow) => {
-    patchLocal(row.id, { saving: true })
+    const scrollY = window.scrollY
+    patchLocal(row.id, { saving: true, rowError: null })
     try {
       const updated = await updateApplication(row.id, {
         selected: row.selected,
@@ -191,10 +192,11 @@ export default function TrackerPage({ applications, setApplications, setError, s
         cover_letter_ref: row.cover_letter_ref,
         notes: row.notes,
       })
-      patchLocal(row.id, { ...updated, saving: false })
+      patchLocal(row.id, { ...updated, saving: false, rowError: null })
     } catch (e) {
-      patchLocal(row.id, { saving: false })
-      setError(e instanceof Error ? e.message : 'Failed to save application')
+      patchLocal(row.id, { saving: false, rowError: e instanceof Error ? e.message : 'Failed to save' })
+    } finally {
+      window.scrollTo({ top: scrollY })
     }
   }
 
@@ -205,11 +207,12 @@ export default function TrackerPage({ applications, setApplications, setError, s
       setApplications((prev) => prev.filter((r) => r.id !== row.id))
       if (activeProcessId === row.id) setActiveProcessId(null)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to delete application')
+      patchLocal(row.id, { rowError: e instanceof Error ? e.message : 'Failed to delete' })
     }
   }
 
   const toggleApplied = async (row: EditableRow, checked: boolean) => {
+    const scrollY = window.scrollY
     const previous = { selected: row.selected, date_applied: row.date_applied, status: row.status }
     const nextStatus = checked
       ? 'Applied'
@@ -221,13 +224,14 @@ export default function TrackerPage({ applications, setApplications, setError, s
       date_applied: checked ? new Date().toLocaleDateString('en-CA') : '',
       status: nextStatus,
     }
-    patchLocal(row.id, { ...patch, saving: true })
+    patchLocal(row.id, { ...patch, saving: true, rowError: null })
     try {
       const updated = await updateApplication(row.id, patch)
-      patchLocal(row.id, { ...updated, saving: false })
+      patchLocal(row.id, { ...updated, saving: false, rowError: null })
     } catch (e) {
-      patchLocal(row.id, { ...previous, saving: false })
-      setError(e instanceof Error ? e.message : 'Failed to update application status')
+      patchLocal(row.id, { ...previous, saving: false, rowError: e instanceof Error ? e.message : 'Failed to update status' })
+    } finally {
+      window.scrollTo({ top: scrollY })
     }
   }
 
@@ -238,7 +242,7 @@ export default function TrackerPage({ applications, setApplications, setError, s
       )
       if (!confirmed) return
     }
-    patchLocal(row.id, { generating: true })
+    patchLocal(row.id, { generating: true, rowError: null })
     setError(null)
     try {
       const generated = await generateDocuments(row.id, { overwrite, author_name: undefined })
@@ -246,12 +250,10 @@ export default function TrackerPage({ applications, setApplications, setError, s
       patchLocal(row.id, { resume_ref: generated.cv_path, cover_letter_ref: generated.cover_letter_path, generating: false })
       await openWorkspaceFile(generated.cover_letter_path)
     } catch (e) {
-      patchLocal(row.id, { generating: false })
-      if (e instanceof ApiError && e.status === 409) {
-        setError(`${e.message}. Use Regenerate to overwrite files when needed.`)
-      } else {
-        setError(e instanceof Error ? e.message : 'Failed to generate tailored files')
-      }
+      const msg = e instanceof ApiError && e.status === 409
+        ? `${e.message}. Use Regenerate to overwrite files when needed.`
+        : e instanceof Error ? e.message : 'Failed to generate tailored files'
+      patchLocal(row.id, { generating: false, rowError: msg })
     }
   }
 
@@ -459,6 +461,12 @@ export default function TrackerPage({ applications, setApplications, setError, s
                         </span>
                         {isUpdatedListing(row) && <span className="status-pill">Updated</span>}
                         {!isUpdatedListing(row) && isNewListing(row) && <span className="status-pill">New</span>}
+                        {row.rowError && (
+                          <span className="row-error-pill" title={row.rowError}>
+                            ⚠ {row.rowError}
+                            <button className="dismiss-error-btn" onClick={() => patchLocal(row.id, { rowError: null })} aria-label="Dismiss error">×</button>
+                          </span>
+                        )}
                         <details className="row-details">
                           <summary className="toggle-summary">Score breakdown</summary>
                           <div className="details-panel score-breakdown">
@@ -528,6 +536,14 @@ export default function TrackerPage({ applications, setApplications, setError, s
                       />
                     </td>
                     <td>
+                      <button
+                        className="secondary-btn"
+                        title="Save changes for this row"
+                        disabled={!!row.saving}
+                        onClick={() => { void saveRow(row) }}
+                      >
+                        {row.saving ? 'Saving…' : 'Save'}
+                      </button>
                       <button
                         className="secondary-btn"
                         title="Open this role in the editor workflow"

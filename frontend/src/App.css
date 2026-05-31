@@ -525,6 +525,33 @@ header {
   font-weight: 600;
 }
 
+.row-error-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  border: 1px solid #fca5a5;
+  background: #fef2f2;
+  color: #991b1b;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 0.72rem;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dismiss-error-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #991b1b;
+  font-size: 0.85rem;
+  padding: 0 2px;
+  line-height: 1;
+}
+
 .score-breakdown {
   gap: 4px;
 }
@@ -796,25 +823,4 @@ header {
   display: flex;
   gap: 10px;
   justify-content: flex-end;
-}
-
-.pagination-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 4px;
-}
-
-.btn-secondary {
-  padding: 4px 12px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text);
-  cursor: pointer;
-  font-size: 0.85rem;
-}
-.btn-secondary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
