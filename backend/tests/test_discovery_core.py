@@ -43,7 +43,7 @@ def test_public_api_surface_is_frozen() -> None:
 
 
 def test_public_dataclass_shapes_are_stable() -> None:
-    assert [field.name for field in fields(DiscoveryContext)] == ["profile", "owned_skills", "search_terms"]
+    assert [field.name for field in fields(DiscoveryContext)] == ["profile", "owned_skills", "search_terms", "cv_words"]
     assert [field.name for field in fields(DiscoveryRunOptions)] == [
         "cv_path",
         "limit",
