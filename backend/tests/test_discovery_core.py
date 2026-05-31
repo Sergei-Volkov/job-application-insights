@@ -14,6 +14,7 @@ for path in (str(_ENGINE_ROOT), str(_APP_ROOT)):
 import job_discovery_engine as discovery_package  # noqa: E402
 from job_discovery_engine import api as discovery_api  # noqa: E402
 from job_discovery_engine import config as discovery_config  # noqa: E402
+from job_discovery_engine.config import USER_CONFIG_PATH, _load_discovery_config  # noqa: E402
 from job_discovery_engine.models import (  # noqa: E402
     CollectionReport,
     DiscoveryContext,
@@ -22,8 +23,9 @@ from job_discovery_engine.models import (  # noqa: E402
 )
 from job_discovery_engine.pipeline import DiscoveryRunOptions, run_discovery_pipeline  # noqa: E402
 from job_discovery_engine.rerankers import LLMRerankReport  # noqa: E402
-from job_discovery_engine.scoring import is_relevant, score_match  # noqa: E402
+from job_discovery_engine.scoring import cv_word_bag, is_relevant, score_match  # noqa: E402
 from job_discovery_engine.sources import collect_remotive  # noqa: E402
+from job_discovery_engine.text_utils import read_cv_text  # noqa: E402
 
 
 def test_public_api_surface_is_frozen() -> None:
@@ -230,3 +232,46 @@ def test_run_discovery_pipeline_public_api(monkeypatch, tmp_path: Path) -> None:
     assert result.strict_matches == [sample_match]
     assert result.synced_count == 1
     assert warnings.messages == []
+
+
+# ---------------------------------------------------------------------------
+# Session 11: app-side engine contract tests (user config + session-10 API)
+# ---------------------------------------------------------------------------
+
+def test_user_config_path_is_accessible() -> None:
+    """App can read USER_CONFIG_PATH from the engine package."""
+    assert USER_CONFIG_PATH == Path("~/.config/job-discovery/config.json").expanduser()
+
+
+def test_user_config_applied_when_present(tmp_path: Path, monkeypatch) -> None:
+    user_cfg = {"scoring": {"extra_skills": ["trino"]}}
+    user_path = tmp_path / "user_config.json"
+    user_path.write_text(json.dumps(user_cfg), encoding="utf-8")
+    monkeypatch.setattr("job_discovery_engine.config.USER_CONFIG_PATH", user_path)
+    monkeypatch.setenv("DISCOVERY_CONFIG_PATH", str(tmp_path / "nonexistent.json"))
+    merged = _load_discovery_config()
+    assert "trino" in merged["scoring"]["extra_skills"]
+
+
+def test_user_config_ignored_when_missing(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("job_discovery_engine.config.USER_CONFIG_PATH", tmp_path / "nope.json")
+    monkeypatch.setenv("DISCOVERY_CONFIG_PATH", str(tmp_path / "nonexistent.json"))
+    merged = _load_discovery_config()
+    assert "keyword_weights" in merged["scoring"]
+
+
+def test_read_cv_text_plain_roundtrip(tmp_path: Path) -> None:
+    f = tmp_path / "cv.txt"
+    f.write_text("Python SQL FastAPI Airflow", encoding="utf-8")
+    assert "Python" in read_cv_text(f)
+
+
+def test_cv_word_bag_basic() -> None:
+    bag = cv_word_bag("Python Airflow FastAPI pipeline orchestration")
+    assert "python" in bag
+    assert "airflow" in bag
+
+
+def test_discovery_context_cv_words_field_default() -> None:
+    ctx = DiscoveryContext(profile="de", owned_skills=set(), search_terms=[])
+    assert ctx.cv_words == frozenset()
