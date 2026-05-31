@@ -1,4 +1,4 @@
-from sqlalchemy import Integer, String, Text
+from sqlalchemy import Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -29,5 +29,5 @@ class JobApplication(Base):
     last_seen_at: Mapped[str] = mapped_column(String(32), default="")
     listing_fingerprint: Mapped[str] = mapped_column(Text, default="")
     change_note: Mapped[str] = mapped_column(Text, default="")
-    score_breakdown: Mapped[str] = mapped_column(Text, default="")
+    score_breakdown: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)
     notes: Mapped[str] = mapped_column(Text, default="")

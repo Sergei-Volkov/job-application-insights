@@ -23,16 +23,24 @@ def _listing_fingerprint(values: list[str]) -> str:
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
-def _parse_score_breakdown(text: str) -> ScoreBreakdownOut | None:
-    """Parse a JSON scoring blob into ScoreBreakdownOut, returning None if invalid."""
-    raw = (text or "").strip()
-    if not raw:
+def _parse_score_breakdown(raw: dict | str | None) -> ScoreBreakdownOut | None:
+    """Convert a score_breakdown value (dict from JSON column, or legacy str) into ScoreBreakdownOut."""
+    if raw is None:
         return None
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(payload, dict):
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return None
+        try:
+            parsed: object = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        payload: dict = parsed  # type: ignore[assignment]
+    elif isinstance(raw, dict):
+        payload = raw
+    else:
         return None
 
     return ScoreBreakdownOut(
@@ -60,6 +68,19 @@ def _is_scoring_json(text: str) -> bool:
         return False
 
 
+def _normalize_score_breakdown(value: str | dict | None) -> dict | None:
+    """Parse a JSON string to dict; return dict as-is; return None for empty/invalid."""
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        return None
+
+
 def _to_job_application_out(record: JobApplication) -> JobApplicationOut:
     return JobApplicationOut(
         id=record.id,
@@ -85,7 +106,7 @@ def _to_job_application_out(record: JobApplication) -> JobApplicationOut:
         listing_fingerprint=record.listing_fingerprint,
         change_note=record.change_note,
         notes=record.notes,
-        score_breakdown=_parse_score_breakdown(record.score_breakdown or record.change_note),
+        score_breakdown=_parse_score_breakdown(record.score_breakdown or record.change_note),  # type: ignore[arg-type]
     )
 
 
@@ -179,6 +200,9 @@ def create_application(
     if not payload_data.get("score_breakdown") and _is_scoring_json(payload_data.get("change_note", "")):
         payload_data["score_breakdown"] = payload_data["change_note"]
 
+    # Normalize to dict before storing (JSON column; incoming value is a JSON string from the engine)
+    payload_data["score_breakdown"] = _normalize_score_breakdown(payload_data.get("score_breakdown"))
+
     record = JobApplication(**payload_data)
     db.add(record)
     try:
@@ -226,6 +250,9 @@ def upsert_application(
     if not payload_data.get("score_breakdown") and _is_scoring_json(payload_data.get("change_note", "")):
         payload_data["score_breakdown"] = payload_data["change_note"]
 
+    # Normalize incoming JSON string to dict before any DB write
+    payload_data["score_breakdown"] = _normalize_score_breakdown(payload_data.get("score_breakdown"))
+
     record = find_existing_application(db, company=payload.company, role=payload.role, link=payload.link)
 
     if record is None:
@@ -244,9 +271,9 @@ def upsert_application(
         elif not payload_data.get("change_note"):
             payload_data["change_note"] = record.change_note or ""
 
-        # Preserve existing score_breakdown if incoming upsert has no scoring JSON
-        if not payload_data.get("score_breakdown"):
-            payload_data["score_breakdown"] = record.score_breakdown or ""
+        # Preserve existing score_breakdown if incoming upsert has none
+        if payload_data.get("score_breakdown") is None:
+            payload_data["score_breakdown"] = record.score_breakdown
 
         for field, value in payload_data.items():
             setattr(record, field, value)
@@ -267,8 +294,8 @@ def upsert_application(
             payload_data["change_note"] = record.change_note or ""
 
         # Preserve existing score_breakdown if incoming has none (mirrors main upsert path)
-        if not payload_data.get("score_breakdown"):
-            payload_data["score_breakdown"] = record.score_breakdown or ""
+        if payload_data.get("score_breakdown") is None:
+            payload_data["score_breakdown"] = record.score_breakdown
 
         for field, value in payload_data.items():
             setattr(record, field, value)
