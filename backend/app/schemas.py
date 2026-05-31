@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ScoreBreakdownOut(BaseModel):
@@ -47,11 +47,8 @@ class JobApplicationUpdate(BaseModel):
     resume_ref: str | None = None
     cover_letter_ref: str | None = None
     match_profile: str | None = None
-    first_seen_at: str | None = None
-    last_seen_at: str | None = None
-    listing_fingerprint: str | None = None
-    change_note: str | None = None
     notes: str | None = None
+    # first_seen_at / last_seen_at are system-managed and not patchable via this schema
 
 
 class JobApplicationUpsert(BaseModel):
@@ -77,6 +74,13 @@ class JobApplicationUpsert(BaseModel):
     listing_fingerprint: str = ""
     change_note: str = ""
     notes: str = ""
+
+    @field_validator("link")
+    @classmethod
+    def _validate_link(cls, v: str) -> str:
+        if v and not (v.startswith("http://") or v.startswith("https://")):
+            raise ValueError("link must be empty or start with http:// or https://")
+        return v
 
 
 class SkillGapItem(BaseModel):
@@ -161,5 +165,5 @@ class WorkspaceFileReadResult(BaseModel):
 
 
 class WorkspaceFileWriteRequest(BaseModel):
-    path: str
-    content: str
+    path: str = Field(max_length=512)
+    content: str = Field(max_length=1_000_000)

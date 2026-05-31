@@ -2,11 +2,8 @@
 FROM node:20-alpine AS build
 
 WORKDIR /app
-COPY package.json package-lock.json* ./
-# npm ci is preferred in CI (requires lockfile). Use npm install here so the
-# image builds even before a lockfile is committed. Once you run
-# `npm install` locally and commit package-lock.json, switch back to npm ci.
-RUN npm install
+COPY package.json package-lock.json ./
+RUN npm ci
 COPY . .
 RUN npm run build
 

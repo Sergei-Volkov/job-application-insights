@@ -114,9 +114,9 @@ export default function App() {
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null)
   const [cooldownSecsLeft, setCooldownSecsLeft] = useState(0)
 
-  const loadDashboard = () => {
+  const loadDashboard = (): Promise<void> => {
     setError(null)
-    Promise.all([fetchApplications()])
+    return Promise.all([fetchApplications()])
       .then(([a]) => {
         setApplications(a)
       })
@@ -395,7 +395,7 @@ export default function App() {
 
     const patch = {
       selected: checked ? 'yes' : 'no',
-      date_applied: checked ? new Date().toISOString().slice(0, 10) : '',
+      date_applied: checked ? new Date().toLocaleDateString('en-CA') : '',
       status: nextStatus,
     }
 
@@ -536,7 +536,7 @@ export default function App() {
       })
       setDiscoveryResult(result)
       setLoading(true)
-      loadDashboard()
+      await loadDashboard()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to run discovery')
     } finally {
