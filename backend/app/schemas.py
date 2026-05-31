@@ -73,6 +73,7 @@ class JobApplicationUpsert(BaseModel):
     last_seen_at: str = ""
     listing_fingerprint: str = ""
     change_note: str = ""
+    score_breakdown: str = ""
     notes: str = ""
 
     @field_validator("link")

@@ -261,6 +261,10 @@ def upsert_application(
         if previous_fingerprint and incoming_fingerprint and previous_fingerprint != incoming_fingerprint:
             payload_data["change_note"] = f"Updated on {today}: listing details changed"
 
+        # Preserve existing score_breakdown if incoming has none (mirrors main upsert path)
+        if not payload_data.get("score_breakdown"):
+            payload_data["score_breakdown"] = record.score_breakdown or ""
+
         for field, value in payload_data.items():
             setattr(record, field, value)
         try:

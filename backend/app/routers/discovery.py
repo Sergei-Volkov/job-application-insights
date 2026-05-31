@@ -1,8 +1,9 @@
 import concurrent.futures
+import importlib
 import ipaddress
+import logging
 import threading
 import time
-import importlib
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -13,6 +14,7 @@ from ..dependencies import require_write_access
 from ..pathing import is_within_path, project_root, resolve_from_project_root, resolve_from_workspace_root, workspace_root
 from ..schemas import DiscoveryRunRequest, DiscoveryRunResult, DiscoveryStatusOut
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["imports"])
 
 # Guard endpoint load and prevent accidental duplicate runs from rapid UI retries.
@@ -266,13 +268,19 @@ def _run_discovery_module(
             )
     finally:
         executor.shutdown(wait=False)
-        # If the thread finished before we get here the event is already set.
-        # If it timed out the thread holds the slot — do NOT release it again.
         if not slot_released_by_thread.is_set():
             pass  # background thread will release when done
 
-
     assert run_warnings is not None
+
+    logger.info(
+        "discovery run complete: strict=%d broad=%d synced=%d failed=%d warnings=%d",
+        len(run_result.strict_matches),
+        len(run_result.broad_matches),
+        run_result.synced_count,
+        len(run_result.failed_rows),
+        len(run_warnings.messages),
+    )
 
     if payload.verbose:
         stdout_lines = [
@@ -344,14 +352,26 @@ def run_discovery(payload: DiscoveryRunRequest, _: None = Depends(require_write_
     seniority = _normalize_seniority(payload)
     api_base_url = _resolve_api_base_url(payload)
 
+    logger.info(
+        "discovery run requested: profile=%s cv=%s limit=%d min_score=%d sources=%s",
+        profile,
+        _sanitize_for_public_logs(str(cv_path)),
+        payload.limit,
+        payload.min_score,
+        ",".join(payload.sources) if payload.sources else "all",
+    )
+
     _claim_discovery_slot()
     try:
         return _run_discovery_module(payload, cv_path, profile, seniority, api_base_url)
     except HTTPException as exc:
-        # 504 timeout: the background thread owns the slot — don't double-release.
-        if exc.status_code != 504:
+        if exc.status_code == 504:
+            logger.warning("discovery timed out after %ds", DISCOVERY_MAX_WALL_SECONDS)
+        else:
+            logger.warning("discovery aborted: HTTP %d", exc.status_code)
             _release_discovery_slot()
         raise
     except Exception:
+        logger.exception("discovery run failed with unexpected error")
         _release_discovery_slot()
         raise
