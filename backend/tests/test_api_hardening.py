@@ -771,3 +771,40 @@ def test_discovery_status_cooldown() -> None:
     assert data["cooldown_seconds_remaining"] is not None
     assert 0 < data["cooldown_seconds_remaining"] <= dr.DISCOVERY_MIN_INTERVAL_SECONDS
     _reset_discovery_guard()
+
+
+def test_score_breakdown_preserved_on_fingerprint_change() -> None:
+    """score_breakdown must survive an upsert that changes the listing fingerprint."""
+    _clear_db()
+    scoring_json = json.dumps({
+        "score": 85,
+        "fit": "Strong",
+        "matched_keywords": ["python", "sql"],
+        "missing_skills": ["kubernetes"],
+        "fit_notes": "Good match overall",
+    })
+
+    # First upsert: create the row with scoring data in change_note (discovery engine pattern)
+    first = client.post(
+        "/applications/upsert",
+        json=_base_payload(change_note=scoring_json, listing_fingerprint="fp-v1"),
+        headers=_auth_headers(),
+    )
+    assert first.status_code == 200
+    body1 = first.json()
+    assert body1["score_breakdown"] is not None
+    assert body1["score_breakdown"]["score"] == 85
+
+    # Second upsert: different fingerprint (listing changed) — change_note is plain text now
+    second = client.post(
+        "/applications/upsert",
+        json=_base_payload(change_note="", listing_fingerprint="fp-v2"),
+        headers=_auth_headers(),
+    )
+    assert second.status_code == 200
+    body2 = second.json()
+    # score_breakdown must still be present from the earlier run
+    assert body2["score_breakdown"] is not None
+    assert body2["score_breakdown"]["score"] == 85
+    # change_note should reflect the human-readable update message
+    assert "Updated on" in body2["change_note"]

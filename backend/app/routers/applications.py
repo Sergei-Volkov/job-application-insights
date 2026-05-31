@@ -27,8 +27,9 @@ def _today_iso() -> str:
     return datetime.now().strftime("%Y-%m-%d")
 
 
-def _score_breakdown_from_change_note(change_note: str) -> ScoreBreakdownOut | None:
-    raw = (change_note or "").strip()
+def _parse_score_breakdown(text: str) -> ScoreBreakdownOut | None:
+    """Parse a JSON scoring blob into ScoreBreakdownOut, returning None if invalid."""
+    raw = (text or "").strip()
     if not raw:
         return None
     try:
@@ -49,6 +50,18 @@ def _score_breakdown_from_change_note(change_note: str) -> ScoreBreakdownOut | N
         else [],
         fit_notes=str(payload.get("fit_notes") or "").strip(),
     )
+
+
+def _is_scoring_json(text: str) -> bool:
+    """Return True if text is a JSON dict that looks like a scoring blob."""
+    raw = (text or "").strip()
+    if not raw or not raw.startswith("{"):
+        return False
+    try:
+        parsed = json.loads(raw)
+        return isinstance(parsed, dict) and "score" in parsed
+    except (json.JSONDecodeError, TypeError):
+        return False
 
 
 def _to_job_application_out(record: JobApplication) -> JobApplicationOut:
@@ -76,7 +89,7 @@ def _to_job_application_out(record: JobApplication) -> JobApplicationOut:
         listing_fingerprint=record.listing_fingerprint,
         change_note=record.change_note,
         notes=record.notes,
-        score_breakdown=_score_breakdown_from_change_note(record.change_note),
+        score_breakdown=_parse_score_breakdown(record.score_breakdown or record.change_note),
     )
 
 
@@ -160,6 +173,10 @@ def create_application(
             ]
         )
 
+    # Extract scoring JSON from change_note into dedicated column
+    if _is_scoring_json(payload_data.get("change_note", "")):
+        payload_data["score_breakdown"] = payload_data["change_note"]
+
     record = JobApplication(**payload_data)
     db.add(record)
     try:
@@ -202,6 +219,10 @@ def upsert_application(
             ]
         )
 
+    # Extract scoring JSON into dedicated column so it survives change_note overwrite
+    if _is_scoring_json(payload_data.get("change_note", "")):
+        payload_data["score_breakdown"] = payload_data["change_note"]
+
     record = find_existing_application(db, company=payload.company, role=payload.role, link=payload.link)
 
     if record is None:
@@ -219,6 +240,10 @@ def upsert_application(
             payload_data["change_note"] = f"Updated on {today}: listing details changed"
         elif not payload_data.get("change_note"):
             payload_data["change_note"] = record.change_note or ""
+
+        # Preserve existing score_breakdown if incoming upsert has no scoring JSON
+        if not payload_data.get("score_breakdown"):
+            payload_data["score_breakdown"] = record.score_breakdown or ""
 
         for field, value in payload_data.items():
             setattr(record, field, value)

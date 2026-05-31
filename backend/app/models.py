@@ -29,4 +29,5 @@ class JobApplication(Base):
     last_seen_at: Mapped[str] = mapped_column(String(32), default="")
     listing_fingerprint: Mapped[str] = mapped_column(Text, default="")
     change_note: Mapped[str] = mapped_column(Text, default="")
+    score_breakdown: Mapped[str] = mapped_column(Text, default="")
     notes: Mapped[str] = mapped_column(Text, default="")

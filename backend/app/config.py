@@ -1,4 +1,4 @@
-from pydantic import ConfigDict
+from pydantic import AliasChoices, ConfigDict, Field
 from pydantic_settings import BaseSettings
 
 
@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     write_api_key: str = ""
 
     # Require X-API-Key for write and execute endpoints.
-    require_write_key: bool = False
+    require_write_key: bool = True
 
     # Default author for generated documents.
     generated_document_author: str = ""
@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     discovery_cv_path: str = ""
     discovery_api_base_url: str = "http://127.0.0.1:8000"
     discovery_default_profile: str = "de"
+
+    # API key for the optional LLM reranker used by the discovery engine.
+    # Checks OPENAI_API_KEY first, then LLM_API_KEY, matching the engine's
+    # own lookup order in job_discovery_engine.rerankers.
+    llm_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("OPENAI_API_KEY", "LLM_API_KEY"),
+    )
 
     # Workspace-relative path root used by document generation and file editing.
     applications_root: str = "applications"

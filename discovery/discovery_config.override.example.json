@@ -7,6 +7,8 @@
   },
   "scoring": {
     "score_strong_min": 12,
-    "score_medium_min": 7
+    "score_medium_min": 7,
+    "extra_skills": [],
+    "keyword_weights": {}
   }
 }

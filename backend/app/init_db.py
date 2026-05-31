@@ -21,6 +21,7 @@ def ensure_columns(db: Session) -> None:
         "last_seen_at": "TEXT DEFAULT ''",
         "listing_fingerprint": "TEXT DEFAULT ''",
         "change_note": "TEXT DEFAULT ''",
+        "score_breakdown": "TEXT DEFAULT ''",
     }
 
     # Validate column names and SQL types against compile-time allowlists before
@@ -44,6 +45,23 @@ def ensure_columns(db: Session) -> None:
             "ON job_applications(link) WHERE link <> ''"
         )
     )
+    # Query-pattern indexes
+    db.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_job_applications_status "
+        "ON job_applications(lower(status))"
+    ))
+    db.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_job_applications_company_role "
+        "ON job_applications(lower(company), lower(role))"
+    ))
+    db.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_job_applications_fit_score "
+        "ON job_applications(fit_score DESC, id ASC)"
+    ))
+    db.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_job_applications_date_found "
+        "ON job_applications(date_found)"
+    ))
     db.commit()
 
 

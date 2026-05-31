@@ -204,18 +204,17 @@ def test_run_discovery_pipeline_public_api(monkeypatch, tmp_path: Path) -> None:
 
     monkeypatch.setattr("job_discovery_engine.pipeline.collect_matches", fake_collect_matches)
     monkeypatch.setattr("job_discovery_engine.pipeline.rerankers.apply_llm_reranker", lambda matches, **kwargs: (matches, llm_report))
-    monkeypatch.setattr("job_discovery_engine.pipeline.outputs.configure_output_dir", lambda path: None)
     monkeypatch.setattr(
         "job_discovery_engine.pipeline.outputs.write_outputs",
-        lambda strict_matches, broad_matches, report=None: (
+        lambda strict_matches, broad_matches, report=None, output_dir=None: (
             tmp_path / "job_matches.csv",
             tmp_path / "job_matches_latest.md",
             tmp_path / "job_matches_broad.md",
         ),
     )
-    monkeypatch.setattr("job_discovery_engine.pipeline.outputs.write_application_notes", lambda matches: tmp_path / "application_notes_latest.md")
+    monkeypatch.setattr("job_discovery_engine.pipeline.outputs.write_application_notes", lambda matches, output_dir=None: tmp_path / "application_notes_latest.md")
     monkeypatch.setattr("job_discovery_engine.pipeline.outputs.sync_application_api", lambda matches, base_url, api_key, match_profile: (1, []))
-    monkeypatch.setattr("job_discovery_engine.pipeline.outputs.write_selected_jobs_checklist", lambda matches: tmp_path / "selected_jobs.md")
+    monkeypatch.setattr("job_discovery_engine.pipeline.outputs.write_selected_jobs_checklist", lambda matches, output_dir=None: tmp_path / "selected_jobs.md")
 
     options = DiscoveryRunOptions(
         cv_path=cv_path,
