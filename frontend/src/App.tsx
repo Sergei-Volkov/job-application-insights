@@ -35,6 +35,7 @@ export default function App() {
 
   // Auto-clear success messages after 4 s
   useEffect(() => {
+    if (!successMessage) return
     const t = setTimeout(() => setSuccessMessage(null), 4000)
     return () => clearTimeout(t)
   }, [successMessage])
