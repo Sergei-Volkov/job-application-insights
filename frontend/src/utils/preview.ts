@@ -7,6 +7,7 @@ const escapeHtml = (value: string) =>
     .replace(/'/g, '&#39;')
 
 export const renderMarkdownPreview = (source: string) => {
+  if (!source.trim()) return '<p class="preview-empty">No preview content.</p>'
   const lines = source.replace(/\r\n/g, '\n').split('\n')
   const chunks: string[] = []
   let inList = false
@@ -67,7 +68,7 @@ export const renderMarkdownPreview = (source: string) => {
       .replace(/(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)/g, '<em>$1</em>')
       .replace(/_(.+?)_/g, '<em>$1</em>')
       .replace(/`(.+?)`/g, '<code>$1</code>')
-      .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
+      .replace(/\[(.+?)\]\((https?:\/\/.+?)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
 
     chunks.push(`<p class="preview-paragraph">${inline}</p>`)
   }
