@@ -1,7 +1,11 @@
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
+from .init_db import init_db
 from .routers.analytics import router as analytics_router
 from .routers.applications import router as applications_router
 from .routers.discovery import router as discovery_router
@@ -9,9 +13,16 @@ from .routers.system import router as system_router
 from .routers.workspace import router as workspace_router
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    init_db()
+    yield
+
+
 app = FastAPI(
     title="Job Application Insights API",
     version="0.3.0",
+    lifespan=lifespan,
     summary="Track job applications, ingest discovered roles, and visualize the application pipeline.",
     description=(
         "A DB-first API for a personal job search workflow. Use it to ingest jobs from a discovery "
