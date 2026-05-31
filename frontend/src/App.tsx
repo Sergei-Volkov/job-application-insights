@@ -24,6 +24,32 @@ import './App.css'
 const SCORE_STRONG_MIN = 12
 const SCORE_MEDIUM_MIN = 7
 
+const DEFAULT_DISCOVERY_PARAMS = {
+  limit: 40,
+  min_score: 7,
+  max_age_days: 45,
+  include_stretch: false,
+  salary_min_usd: '',
+  timezones: '',
+  seniority: '',
+  use_outcome_priors: false,
+  prior_lookback_days: 365,
+  source_prior_weight: 1,
+  role_prior_weight: 1,
+  use_llm_reranker: false,
+  llm_top_n: 20,
+  llm_weight: 1,
+  llm_model: '',
+  llm_api_base_url: '',
+  llm_dry_run: false,
+  llm_max_calls: 20,
+  llm_max_input_chars: 50000,
+  llm_max_retries: 2,
+  llm_retry_backoff_seconds: 0.5,
+  llm_timeout_seconds: 20,
+  output_dir: '',
+}
+
 type ScoreBreakdown = {
   score: number | null
   fit: string
@@ -57,30 +83,12 @@ export default function App() {
     return (saved as AppPage) || 'pipeline'
   })
   const [customNextStepById, setCustomNextStepById] = useState<Record<number, string>>({})
-  const [discoveryParams, setDiscoveryParams] = useState({
-    limit: 40,
-    min_score: 7,
-    max_age_days: 45,
-    include_stretch: false,
-    salary_min_usd: '',
-    timezones: '',
-    seniority: '',
-    use_outcome_priors: false,
-    prior_lookback_days: 365,
-    source_prior_weight: 1,
-    role_prior_weight: 1,
-    use_llm_reranker: false,
-    llm_top_n: 20,
-    llm_weight: 1,
-    llm_model: '',
-    llm_api_base_url: '',
-    llm_dry_run: false,
-    llm_max_calls: 20,
-    llm_max_input_chars: 50000,
-    llm_max_retries: 2,
-    llm_retry_backoff_seconds: 0.5,
-    llm_timeout_seconds: 20,
-    output_dir: '',
+  const [discoveryParams, setDiscoveryParams] = useState<typeof DEFAULT_DISCOVERY_PARAMS>(() => {
+    try {
+      const saved = localStorage.getItem('discoveryParams')
+      if (saved) return { ...DEFAULT_DISCOVERY_PARAMS, ...(JSON.parse(saved) as typeof DEFAULT_DISCOVERY_PARAMS) }
+    } catch {}
+    return DEFAULT_DISCOVERY_PARAMS
   })
   const [manualJobForm, setManualJobForm] = useState({ company: '', role: '', link: '', description: '' })
   const [discoveryCvPath, setDiscoveryCvPath] = useState<string>(() => localStorage.getItem('discoveryCvPath') || '')
@@ -101,6 +109,10 @@ export default function App() {
   const [activeProcessId, setActiveProcessId] = useState<number | null>(null)
   const [lastProcessFileById, setLastProcessFileById] = useState<Record<number, string>>({})
   const editorSectionRef = useRef<HTMLElement | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null)
+  const [cooldownSecsLeft, setCooldownSecsLeft] = useState(0)
 
   const loadDashboard = () => {
     setError(null)
@@ -129,6 +141,32 @@ export default function App() {
   }, [discoveryVerbose])
 
   useEffect(() => {
+    localStorage.setItem('discoveryParams', JSON.stringify(discoveryParams))
+  }, [discoveryParams])
+
+  useEffect(() => {
+    if (cooldownSecsLeft <= 0) return
+    const t = setTimeout(() => setCooldownSecsLeft((s) => Math.max(0, s - 1)), 1000)
+    return () => clearTimeout(t)
+  }, [cooldownSecsLeft])
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (
+        e.key === '/' &&
+        !(e.target instanceof HTMLInputElement) &&
+        !(e.target instanceof HTMLTextAreaElement) &&
+        !(e.target instanceof HTMLSelectElement)
+      ) {
+        e.preventDefault()
+        searchInputRef.current?.focus()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
+
+  useEffect(() => {
     loadDashboard()
   }, [])
 
@@ -151,7 +189,16 @@ export default function App() {
   }
 
   const filteredApplications = useMemo(() => {
-    const filtered = filterApplications(applications, profileFilter, listingFilter)
+    let filtered = filterApplications(applications, profileFilter, listingFilter)
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase()
+      filtered = filtered.filter(
+        (row) =>
+          row.company.toLowerCase().includes(q) ||
+          row.role.toLowerCase().includes(q) ||
+          (row.notes || '').toLowerCase().includes(q)
+      )
+    }
     if (!sortKey) return filtered
     return [...filtered].sort((a, b) => {
       let av: string | number = ''
@@ -167,7 +214,7 @@ export default function App() {
       if (av > bv) return sortDir === 'asc' ? 1 : -1
       return 0
     })
-  }, [applications, listingFilter, profileFilter, sortDir, sortKey])
+  }, [applications, listingFilter, profileFilter, searchQuery, sortDir, sortKey])
 
   const activeProcessRow = useMemo(
     () => applications.find((row) => row.id === activeProcessId) ?? null,
@@ -241,7 +288,7 @@ export default function App() {
   }
 
   const deleteRow = async (row: EditableRow) => {
-    if (!window.confirm(`Delete "${row.company} – ${row.role}"? This cannot be undone.`)) return
+    setPendingDeleteId(null)
     try {
       await deleteApplication(row.id)
       setApplications((prev) => prev.filter((r) => r.id !== row.id))
@@ -494,6 +541,7 @@ export default function App() {
       setError(e instanceof Error ? e.message : 'Failed to run discovery')
     } finally {
       setDiscovering(false)
+      setCooldownSecsLeft(30)
     }
   }
 
@@ -958,8 +1006,8 @@ export default function App() {
                     />
                     Include stretch
                   </label>
-                  <button className="save-btn" disabled={discovering} onClick={() => void triggerDiscovery()}>
-                    {discovering ? 'Running...' : 'Run discovery'}
+                  <button className="save-btn" disabled={discovering || cooldownSecsLeft > 0} onClick={() => void triggerDiscovery()}>
+                    {discovering ? 'Running...' : cooldownSecsLeft > 0 ? `Wait ${cooldownSecsLeft}s` : 'Run discovery'}
                   </button>
                 </div>
                 <div className="details-panel" style={{ marginTop: '10px' }}>
@@ -1112,6 +1160,28 @@ export default function App() {
                     <option value="new">New</option>
                     <option value="updated">Updated</option>
                   </select>
+
+                  <div className="search-wrap">
+                    <input
+                      ref={searchInputRef}
+                      id="tracker-search"
+                      className="text-input"
+                      type="text"
+                      placeholder='Search company, role, notes… ("/" to focus)'
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                    />
+                    {searchQuery && (
+                      <button
+                        className="search-clear-btn"
+                        title="Clear search"
+                        onClick={() => setSearchQuery('')}
+                        aria-label="Clear search"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="table-wrap">
@@ -1251,15 +1321,23 @@ export default function App() {
                               >
                                 Process
                               </button>
-                              <button
-                                className="delete-btn"
-                                title="Permanently delete this application"
-                                disabled={!!row.saving}
-                                onClick={() => void deleteRow(row)}
-                                style={{ marginTop: '4px' }}
-                              >
-                                Delete
-                              </button>
+                              {pendingDeleteId === row.id ? (
+                                <div className="delete-confirm">
+                                  <span className="muted-mini">Delete?</span>
+                                  <button className="delete-btn" onClick={() => void deleteRow(row)}>Yes</button>
+                                  <button className="secondary-btn" style={{ fontSize: '0.82rem', padding: '5px 10px' }} onClick={() => setPendingDeleteId(null)}>No</button>
+                                </div>
+                              ) : (
+                                <button
+                                  className="delete-btn"
+                                  title="Permanently delete this application"
+                                  disabled={!!row.saving}
+                                  onClick={() => setPendingDeleteId(row.id)}
+                                  style={{ marginTop: '4px' }}
+                                >
+                                  Delete
+                                </button>
+                              )}
                             </td>
                           </tr>
                         )
