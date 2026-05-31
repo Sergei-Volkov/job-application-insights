@@ -1,8 +1,8 @@
-import { describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
-import type { ApplicationItem, DiscoveryRunResult, GenerateDocumentsResult } from './api'
+import type { ApplicationItem, GenerateDocumentsResult } from './api'
 
 vi.mock('recharts', () => {
   const passthrough = ({ children }: { children?: unknown }) => children
@@ -23,10 +23,13 @@ const apiMocks = vi.hoisted(() => {
   return {
     fetchApplications: vi.fn(),
     runDiscovery: vi.fn(),
+    fetchDiscoveryStatus: vi.fn(),
     updateApplication: vi.fn(),
     generateDocuments: vi.fn(),
     readWorkspaceFile: vi.fn(),
     writeWorkspaceFile: vi.fn(),
+    deleteApplication: vi.fn(),
+    upsertApplication: vi.fn(),
   }
 })
 
@@ -36,7 +39,7 @@ if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = vi.fn()
 }
 
-function makeRow(): ApplicationItem {
+function makeRow(overrides: Partial<ApplicationItem> = {}): ApplicationItem {
   return {
     id: 1,
     selected: 'no',
@@ -61,12 +64,15 @@ function makeRow(): ApplicationItem {
     listing_fingerprint: 'abc',
     change_note: '',
     notes: 'Mock notes',
+    ...overrides,
   }
 }
 
 describe('App tracker workflow', () => {
+  afterEach(cleanup)
+  beforeEach(() => vi.resetAllMocks())
+
   it('supports generate, open, save, and mark applied flow', async () => {
-    const runResult: DiscoveryRunResult = { exit_code: 0, command: [], stdout: '', stderr: '' }
     const generated: GenerateDocumentsResult = {
       vacancy_dir: 'applications/vacancies/northwind_data_engineer',
       vacancy_path: 'applications/vacancies/northwind_data_engineer/vacancy.md',
@@ -76,7 +82,6 @@ describe('App tracker workflow', () => {
     }
 
     apiMocks.fetchApplications.mockResolvedValue([makeRow()])
-    apiMocks.runDiscovery.mockResolvedValue(runResult)
     apiMocks.generateDocuments.mockResolvedValue(generated)
     apiMocks.readWorkspaceFile.mockResolvedValue({ path: generated.cover_letter_path, content: 'Cover Draft' })
     apiMocks.writeWorkspaceFile.mockResolvedValue({ path: generated.cover_letter_path, content: 'Cover Draft edited' })
@@ -132,5 +137,65 @@ describe('App tracker workflow', () => {
       expect(typeof patch.date_applied).toBe('string')
       expect(patch.date_applied.length).toBe(10)
     }
+  })
+
+  it('filters tracker rows via search box', async () => {
+    apiMocks.fetchApplications.mockResolvedValue([
+      makeRow({ id: 1, company: 'Northwind', role: 'Data Engineer' }),
+      makeRow({ id: 2, company: 'Acme Corp', role: 'Backend Engineer' }),
+    ])
+    render(<App />)
+    await screen.findByText('Application Tracker')
+
+    const searchInput = screen.getByPlaceholderText(/Search company/i)
+    await userEvent.type(searchInput, 'Acme')
+
+    expect(screen.getByText('Acme Corp')).toBeTruthy()
+    expect(screen.queryByText('Northwind')).toBeNull()
+  })
+
+  it('shows inline delete confirmation and removes row on confirm', async () => {
+    apiMocks.fetchApplications.mockResolvedValue([makeRow()])
+    apiMocks.deleteApplication.mockResolvedValue(undefined)
+    render(<App />)
+    await screen.findByText('Application Tracker')
+
+    const deleteBtn = screen.getByRole('button', { name: 'Delete' })
+    await userEvent.click(deleteBtn)
+
+    expect(screen.getByText('Delete?')).toBeTruthy()
+    const confirmBtn = screen.getByRole('button', { name: 'Yes' })
+    await userEvent.click(confirmBtn)
+
+    await waitFor(() => {
+      expect(apiMocks.deleteApplication).toHaveBeenCalledWith(1)
+    })
+    expect(screen.queryByText('Northwind')).toBeNull()
+  })
+
+  it('renders score breakdown details panel with keyword data', async () => {
+    apiMocks.fetchApplications.mockResolvedValue([
+      makeRow({
+        fit_score: 14,
+        score_breakdown: {
+          score: 14,
+          fit: 'Strong',
+          matched_keywords: ['Python', 'SQL'],
+          missing_skills: ['dbt'],
+          fit_notes: 'Direct overlap on Python, SQL.',
+        },
+      }),
+    ])
+    render(<App />)
+    await screen.findByText('Application Tracker')
+
+    const summary = screen.getByText('Score breakdown')
+    await userEvent.click(summary)
+
+    const panel = document.querySelector('.score-breakdown')
+    expect(panel).toBeTruthy()
+    expect(panel!.textContent).toContain('Python, SQL')
+    expect(panel!.textContent).toContain('dbt')
+    expect(panel!.textContent).toContain('Direct overlap on Python, SQL')
   })
 })
