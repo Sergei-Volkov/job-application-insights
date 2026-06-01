@@ -1,10 +1,48 @@
-import { useEffect, useState } from 'react'
+import { Component, useEffect, useState } from 'react'
+import type { ErrorInfo, ReactNode } from 'react'
 import { fetchApplications } from './api'
 import type { AppPage, EditableRow } from './appTypes'
 import AnalyticsPage from './pages/AnalyticsPage'
 import DiscoveryPage from './pages/DiscoveryPage'
 import TrackerPage from './pages/TrackerPage'
 import './App.css'
+
+// ── Error boundary ────────────────────────────────────────────────────────────
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  constructor(props: { children: ReactNode }) {
+    super(props)
+    this.state = { error: null }
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { error }
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('Unhandled render error:', error, info.componentStack)
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="error-banner" style={{ margin: '2rem', padding: '1.5rem' }}>
+          <strong>Something went wrong.</strong>{' '}
+          <span>{this.state.error.message}</span>
+          <br />
+          <button
+            className="secondary-btn"
+            style={{ marginTop: '1rem' }}
+            onClick={() => this.setState({ error: null })}
+          >
+            Try again
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 export default function App() {
   const [applications, setApplications] = useState<EditableRow[]>([])
@@ -33,10 +71,10 @@ export default function App() {
     localStorage.setItem('activePage', activePage)
   }, [activePage])
 
-  // Auto-clear success messages after 4 s
+  // Auto-clear success messages after 8 s
   useEffect(() => {
     if (!successMessage) return
-    const t = setTimeout(() => setSuccessMessage(null), 4000)
+    const t = setTimeout(() => setSuccessMessage(null), 8000)
     return () => clearTimeout(t)
   }, [successMessage])
 
@@ -75,7 +113,7 @@ export default function App() {
       {loading ? (
         <p className="empty-state">Loading…</p>
       ) : (
-        <>
+        <ErrorBoundary>
           {activePage === 'analytics' && (
             <AnalyticsPage applications={applications} />
           )}
@@ -97,7 +135,7 @@ export default function App() {
               setSuccessMessage={setSuccessMessage}
             />
           )}
-        </>
+        </ErrorBoundary>
       )}
     </div>
   )

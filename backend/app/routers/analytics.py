@@ -1,3 +1,4 @@
+import re
 from collections import Counter
 from datetime import datetime
 
@@ -54,17 +55,21 @@ def stats(db: Session = Depends(get_db)) -> StatsOut:
     summary="Extract missing skills from notes",
 )
 def missing_skills(db: Session = Depends(get_db)) -> SkillGapList:
-    marker = "missing or adjacent tools:"
+    marker = r"missing or adjacent tools:"
     found: list[str] = []
 
     for (notes,) in db.query(JobApplication.notes).all():
         text = (notes or "").strip()
-        lower = text.lower()
-        if marker not in lower:
+        m = re.search(marker, text, re.IGNORECASE)
+        if not m:
             continue
 
-        idx = lower.index(marker)
-        raw = text[idx + len(marker) :]
+        raw = text[m.end():]
+        # Stop at the next recognised section header (line starting with a capital word
+        # followed by a colon) so we don't slurp unrelated content.
+        section_end = re.search(r"\n[A-Z]", raw)
+        if section_end:
+            raw = raw[: section_end.start()]
         parts = [p.strip(" .") for p in raw.split(",") if p.strip()]
         found.extend(parts)
 

@@ -4,6 +4,13 @@ import type { DiscoveryRunResult, DiscoveryStatus } from '../api'
 import { DISCOVERY_SOURCES, SCORE_STRONG_MIN, SCORE_MEDIUM_MIN } from '../appConstants'
 import type { DiscoveryProfile } from '../appTypes'
 
+const STORAGE_KEYS = {
+  params: 'discoveryParams',
+  cvPath: 'discoveryCvPath',
+  apiBaseUrl: 'discoveryApiBaseUrl',
+  verbose: 'discoveryVerbose',
+} as const
+
 const DEFAULT_DISCOVERY_PARAMS = {
   limit: 40,
   min_score: 7,
@@ -50,16 +57,16 @@ export default function DiscoveryPage({ setError, setSuccessMessage, setLoading,
   const [discoveryProfile, setDiscoveryProfile] = useState<DiscoveryProfile>('de')
   const [discoveryParams, setDiscoveryParams] = useState<typeof DEFAULT_DISCOVERY_PARAMS>(() => {
     try {
-      const saved = localStorage.getItem('discoveryParams')
+      const saved = localStorage.getItem(STORAGE_KEYS.params)
       if (saved) return { ...DEFAULT_DISCOVERY_PARAMS, ...(JSON.parse(saved) as typeof DEFAULT_DISCOVERY_PARAMS) }
     } catch {}
     return DEFAULT_DISCOVERY_PARAMS
   })
-  const [discoveryCvPath, setDiscoveryCvPath] = useState<string>(() => localStorage.getItem('discoveryCvPath') || '')
+  const [discoveryCvPath, setDiscoveryCvPath] = useState<string>(() => localStorage.getItem(STORAGE_KEYS.cvPath) || '')
   const [discoveryApiBaseUrl, setDiscoveryApiBaseUrl] = useState<string>(
-    () => localStorage.getItem('discoveryApiBaseUrl') || ''
+    () => localStorage.getItem(STORAGE_KEYS.apiBaseUrl) || ''
   )
-  const [discoveryVerbose, setDiscoveryVerbose] = useState<boolean>(() => localStorage.getItem('discoveryVerbose') === 'true')
+  const [discoveryVerbose, setDiscoveryVerbose] = useState<boolean>(() => localStorage.getItem(STORAGE_KEYS.verbose) === 'true')
   const [discoverySourceSelection, setDiscoverySourceSelection] = useState<Record<string, boolean>>(
     () => Object.fromEntries(DISCOVERY_SOURCES.map((source) => [source.key, true]))
   )
@@ -69,11 +76,12 @@ export default function DiscoveryPage({ setError, setSuccessMessage, setLoading,
   const [cooldownSecsLeft, setCooldownSecsLeft] = useState(0)
   const [manualJobForm, setManualJobForm] = useState({ company: '', role: '', link: '', description: '' })
   const discoveryPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const pollFailureCountRef = useRef(0)
 
-  useEffect(() => { localStorage.setItem('discoveryCvPath', discoveryCvPath) }, [discoveryCvPath])
-  useEffect(() => { localStorage.setItem('discoveryApiBaseUrl', discoveryApiBaseUrl) }, [discoveryApiBaseUrl])
-  useEffect(() => { localStorage.setItem('discoveryVerbose', discoveryVerbose ? 'true' : 'false') }, [discoveryVerbose])
-  useEffect(() => { localStorage.setItem('discoveryParams', JSON.stringify(discoveryParams)) }, [discoveryParams])
+  useEffect(() => { localStorage.setItem(STORAGE_KEYS.cvPath, discoveryCvPath) }, [discoveryCvPath])
+  useEffect(() => { localStorage.setItem(STORAGE_KEYS.apiBaseUrl, discoveryApiBaseUrl) }, [discoveryApiBaseUrl])
+  useEffect(() => { localStorage.setItem(STORAGE_KEYS.verbose, discoveryVerbose ? 'true' : 'false') }, [discoveryVerbose])
+  useEffect(() => { localStorage.setItem(STORAGE_KEYS.params, JSON.stringify(discoveryParams)) }, [discoveryParams])
 
   useEffect(() => {
     if (cooldownSecsLeft <= 0) return
@@ -87,19 +95,25 @@ export default function DiscoveryPage({ setError, setSuccessMessage, setLoading,
         clearInterval(discoveryPollRef.current)
         discoveryPollRef.current = null
       }
+      pollFailureCountRef.current = 0
       return
     }
 
     const poll = async () => {
       try {
         const status = await fetchDiscoveryStatus()
+        pollFailureCountRef.current = 0
         setDiscoveryStatus(status)
         if (!status.in_flight) {
           setLoading(true)
           void onRunComplete()
         }
       } catch {
-        // Swallow poll errors silently; triggerDiscovery error path handles failures
+        pollFailureCountRef.current += 1
+        if (pollFailureCountRef.current >= 3) {
+          setError('Lost contact with backend during discovery run — the run may still be in progress.')
+          pollFailureCountRef.current = 0
+        }
       }
     }
 
@@ -565,7 +579,7 @@ export default function DiscoveryPage({ setError, setSuccessMessage, setLoading,
             title="Reset all discovery parameters to defaults"
             onClick={() => {
               setDiscoveryParams(DEFAULT_DISCOVERY_PARAMS)
-              localStorage.removeItem('discoveryParams')
+              localStorage.removeItem(STORAGE_KEYS.params)
             }}
           >
             Reset

@@ -18,16 +18,11 @@ export class ApiError extends Error {
   }
 }
 
-function writeHeaders(): Record<string, string> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (WRITE_API_KEY) {
-    headers['X-API-Key'] = WRITE_API_KEY
-  }
-  return headers
-}
-
-function authHeaders(): Record<string, string> {
+function buildHeaders(includeContentType = false): Record<string, string> {
   const headers: Record<string, string> = {}
+  if (includeContentType) {
+    headers['Content-Type'] = 'application/json'
+  }
   if (WRITE_API_KEY) {
     headers['X-API-Key'] = WRITE_API_KEY
   }
@@ -193,7 +188,7 @@ export interface WorkspaceFileResult {
 
 async function apiFetch<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    headers: authHeaders(),
+    headers: buildHeaders(),
   })
   if (!res.ok) throw await toApiError(res, path)
   return res.json() as Promise<T>
@@ -202,7 +197,7 @@ async function apiFetch<T>(path: string): Promise<T> {
 async function apiPatch<T>(path: string, payload: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'PATCH',
-    headers: writeHeaders(),
+    headers: buildHeaders(true),
     body: JSON.stringify(payload),
   })
   if (!res.ok) throw await toApiError(res, path)
@@ -212,7 +207,7 @@ async function apiPatch<T>(path: string, payload: unknown): Promise<T> {
 async function apiPost<T>(path: string, payload?: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
-    headers: writeHeaders(),
+    headers: buildHeaders(true),
     body: payload === undefined ? undefined : JSON.stringify(payload),
   })
   if (!res.ok) throw await toApiError(res, path)
@@ -222,7 +217,7 @@ async function apiPost<T>(path: string, payload?: unknown): Promise<T> {
 async function apiPut<T>(path: string, payload: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'PUT',
-    headers: writeHeaders(),
+    headers: buildHeaders(true),
     body: JSON.stringify(payload),
   })
   if (!res.ok) throw await toApiError(res, path)
@@ -232,7 +227,7 @@ async function apiPut<T>(path: string, payload: unknown): Promise<T> {
 async function apiDelete(path: string): Promise<void> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'DELETE',
-    headers: writeHeaders(),
+    headers: buildHeaders(true),
   })
   if (!res.ok) throw await toApiError(res, path)
 }
