@@ -271,7 +271,11 @@ def _run_discovery_module(
         if not slot_released_by_thread.is_set():
             pass  # background thread will release when done
 
-    assert run_warnings is not None
+    if run_warnings is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Discovery module returned an unexpected result (no warnings object).",
+        )
 
     logger.info(
         "discovery run complete: strict=%d broad=%d synced=%d failed=%d warnings=%d",

@@ -41,42 +41,42 @@ class JobApplicationOut(BaseModel):
 
 
 class JobApplicationUpdate(BaseModel):
-    selected: str | None = None
-    date_applied: str | None = None
-    status: str | None = None
-    next_step: str | None = None
-    follow_up_date: str | None = None
-    resume_ref: str | None = None
-    cover_letter_ref: str | None = None
-    match_profile: str | None = None
-    notes: str | None = None
+    selected: str | None = Field(default=None, max_length=10)
+    date_applied: str | None = Field(default=None, max_length=32)
+    status: str | None = Field(default=None, max_length=128)
+    next_step: str | None = Field(default=None, max_length=8192)
+    follow_up_date: str | None = Field(default=None, max_length=32)
+    resume_ref: str | None = Field(default=None, max_length=8192)
+    cover_letter_ref: str | None = Field(default=None, max_length=8192)
+    match_profile: str | None = Field(default=None, max_length=32)
+    notes: str | None = Field(default=None, max_length=50_000)
     # first_seen_at / last_seen_at are system-managed and not patchable via this schema
 
 
 class JobApplicationUpsert(BaseModel):
-    selected: str = "no"
-    date_found: str = ""
-    date_applied: str = ""
+    selected: str = Field(default="no", max_length=10)
+    date_found: str = Field(default="", max_length=32)
+    date_applied: str = Field(default="", max_length=32)
     company: str = Field(min_length=1, max_length=255)
     role: str = Field(min_length=1, max_length=255)
-    location: str = ""
-    source: str = ""
-    remote_type: str = ""
-    fit: str = ""
+    location: str = Field(default="", max_length=255)
+    source: str = Field(default="", max_length=255)
+    remote_type: str = Field(default="", max_length=255)
+    fit: str = Field(default="", max_length=64)
     fit_score: int = Field(default=0, ge=0, le=100)
-    link: str = ""
-    status: str = ""
-    next_step: str = ""
-    follow_up_date: str = ""
-    resume_ref: str = ""
-    cover_letter_ref: str = ""
-    match_profile: str = ""
-    first_seen_at: str = ""
-    last_seen_at: str = ""
-    listing_fingerprint: str = ""
-    change_note: str = ""
-    score_breakdown: str = ""
-    notes: str = ""
+    link: str = Field(default="", max_length=8192)
+    status: str = Field(default="", max_length=128)
+    next_step: str = Field(default="", max_length=8192)
+    follow_up_date: str = Field(default="", max_length=32)
+    resume_ref: str = Field(default="", max_length=8192)
+    cover_letter_ref: str = Field(default="", max_length=8192)
+    match_profile: str = Field(default="", max_length=32)
+    first_seen_at: str = Field(default="", max_length=32)
+    last_seen_at: str = Field(default="", max_length=32)
+    listing_fingerprint: str = Field(default="", max_length=8192)
+    change_note: str = Field(default="", max_length=50_000)
+    score_breakdown: str = Field(default="", max_length=100_000)
+    notes: str = Field(default="", max_length=50_000)
 
     @field_validator("link")
     @classmethod

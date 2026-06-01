@@ -1,4 +1,4 @@
-from sqlalchemy import Integer, JSON, String, Text
+from sqlalchemy import Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -31,3 +31,15 @@ class JobApplication(Base):
     change_note: Mapped[str] = mapped_column(Text, default="")
     score_breakdown: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)
     notes: Mapped[str] = mapped_column(Text, default="")
+
+    __table_args__ = (
+        # Duplicate-detection queries (find_existing_application)
+        Index("ix_job_applications_link", "link"),
+        Index("ix_job_applications_company_role", "company", "role"),
+        # Filtering / ordering in list_applications
+        Index("ix_job_applications_status", "status"),
+        Index("ix_job_applications_source", "source"),
+        Index("ix_job_applications_fit_score_id", "fit_score", "id"),
+        # Analytics trend query
+        Index("ix_job_applications_date_found", "date_found"),
+    )
