@@ -82,7 +82,7 @@ describe('App tracker workflow', () => {
       notes_path: 'applications/vacancies/northwind_data_engineer/notes.md',
     }
 
-    apiMocks.fetchApplications.mockResolvedValue([makeRow()])
+    apiMocks.fetchApplications.mockResolvedValue({ items: [makeRow()], total: 1, limit: 50, offset: 0 })
     apiMocks.generateDocuments.mockResolvedValue(generated)
     apiMocks.readWorkspaceFile.mockResolvedValue({ path: generated.cover_letter_path, content: 'Cover Draft' })
     apiMocks.writeWorkspaceFile.mockResolvedValue({ path: generated.cover_letter_path, content: 'Cover Draft edited' })
@@ -141,10 +141,15 @@ describe('App tracker workflow', () => {
   })
 
   it('filters tracker rows via search box', async () => {
-    apiMocks.fetchApplications.mockResolvedValue([
-      makeRow({ id: 1, company: 'Northwind', role: 'Data Engineer' }),
-      makeRow({ id: 2, company: 'Acme Corp', role: 'Backend Engineer' }),
-    ])
+    apiMocks.fetchApplications.mockResolvedValue({
+      items: [
+        makeRow({ id: 1, company: 'Northwind', role: 'Data Engineer' }),
+        makeRow({ id: 2, company: 'Acme Corp', role: 'Backend Engineer' }),
+      ],
+      total: 2,
+      limit: 50,
+      offset: 0,
+    })
     render(<App />)
     await screen.findByText('Application Tracker')
 
@@ -156,7 +161,7 @@ describe('App tracker workflow', () => {
   })
 
   it('shows inline delete confirmation and removes row on confirm', async () => {
-    apiMocks.fetchApplications.mockResolvedValue([makeRow()])
+    apiMocks.fetchApplications.mockResolvedValue({ items: [makeRow()], total: 1, limit: 50, offset: 0 })
     apiMocks.deleteApplication.mockResolvedValue(undefined)
     render(<App />)
     await screen.findByText('Application Tracker')
@@ -175,18 +180,23 @@ describe('App tracker workflow', () => {
   })
 
   it('renders score breakdown details panel with keyword data', async () => {
-    apiMocks.fetchApplications.mockResolvedValue([
-      makeRow({
-        fit_score: 14,
-        score_breakdown: {
-          score: 14,
-          fit: 'Strong',
-          matched_keywords: ['Python', 'SQL'],
-          missing_skills: ['dbt'],
-          fit_notes: 'Direct overlap on Python, SQL.',
-        },
-      }),
-    ])
+    apiMocks.fetchApplications.mockResolvedValue({
+      items: [
+        makeRow({
+          fit_score: 14,
+          score_breakdown: {
+            score: 14,
+            fit: 'Strong',
+            matched_keywords: ['Python', 'SQL'],
+            missing_skills: ['dbt'],
+            fit_notes: 'Direct overlap on Python, SQL.',
+          },
+        }),
+      ],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
     render(<App />)
     await screen.findByText('Application Tracker')
 

@@ -55,7 +55,7 @@ export default function TrackerPage({ applications, setApplications, setError, s
   const loadMore = (): void => {
     setLoadingMore(true)
     fetchApplications(50, applications.length)
-      .then((more) => setApplications((prev) => [...prev, ...more]))
+      .then((res) => setApplications((prev) => [...prev, ...res.items]))
       .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to load more'))
       .finally(() => setLoadingMore(false))
   }

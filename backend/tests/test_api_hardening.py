@@ -130,7 +130,7 @@ def test_status_filter_is_exact_match_case_insensitive() -> None:
     result = client.get("/applications?status=applied&limit=50")
     assert result.status_code == 200
 
-    rows = result.json()
+    rows = result.json()["items"]
     assert len(rows) == 1
     assert rows[0]["status"] == "Applied"
 
@@ -158,7 +158,7 @@ def test_applications_include_score_breakdown_when_present() -> None:
 
     listed = client.get("/applications?limit=50")
     assert listed.status_code == 200
-    rows = listed.json()
+    rows = listed.json()["items"]
     assert len(rows) == 1
     assert rows[0]["score_breakdown"] is not None
     assert rows[0]["score_breakdown"]["score"] == 13
@@ -714,7 +714,7 @@ def test_delete_application() -> None:
 
     # Gone afterwards
     listed = client.get("/applications?limit=50")
-    ids = [r["id"] for r in listed.json()]
+    ids = [r["id"] for r in listed.json()["items"]]
     assert app_id not in ids
 
     # Second delete → 404
@@ -1068,3 +1068,64 @@ def test_run_discovery_module_import_error_returns_500() -> None:
         )
     assert response.status_code == 500
     assert "Discovery module" in response.json()["detail"]
+
+
+def test_workspace_file_rejects_symlink_escape() -> None:
+    """GET /workspace-file rejects a path that resolves outside the workspace via symlink."""
+    import tempfile
+    from app.pathing import applications_root, workspace_root
+
+    ws_root = workspace_root()
+    app_root = applications_root()
+    fd, outside = tempfile.mkstemp()
+    os.close(fd)
+    symlink = app_root / "_test_evil_symlink.txt"
+    try:
+        symlink.symlink_to(outside)
+        rel_path = symlink.relative_to(ws_root).as_posix()
+        response = client.get(f"/workspace-file?path={rel_path}", headers=_auth_headers())
+        assert response.status_code == 400
+    finally:
+        symlink.unlink(missing_ok=True)
+        os.unlink(outside)
+
+
+def test_workspace_file_write_at_limit_is_accepted() -> None:
+    """PUT /workspace-file accepts exactly 1 MB of content."""
+    from app.pathing import applications_root, workspace_root
+
+    ws_root = workspace_root()
+    app_root = applications_root()
+    # Build a path that is within applications_root and express it relative to workspace_root
+    target_abs = app_root / "_test_limit_boundary.txt"
+    rel_path = target_abs.relative_to(ws_root).as_posix()
+
+    content = "x" * 1_000_000
+    try:
+        response = client.put(
+            "/workspace-file",
+            json={"path": rel_path, "content": content},
+            headers=_auth_headers(),
+        )
+        assert response.status_code == 200
+    finally:
+        if target_abs.exists():
+            target_abs.unlink()
+
+
+def test_workspace_file_write_above_limit_is_rejected() -> None:
+    """PUT /workspace-file rejects content exceeding the 1 MB limit with 422."""
+    from app.pathing import applications_root, workspace_root
+
+    ws_root = workspace_root()
+    app_root = applications_root()
+    target_abs = app_root / "_test_over_limit.txt"
+    rel_path = target_abs.relative_to(ws_root).as_posix()
+
+    content = "x" * 1_000_001
+    response = client.put(
+        "/workspace-file",
+        json={"path": rel_path, "content": content},
+        headers=_auth_headers(),
+    )
+    assert response.status_code == 422

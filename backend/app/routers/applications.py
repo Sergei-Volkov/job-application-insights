@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from ..dependencies import get_db, require_write_access
 from ..helpers import today_iso
 from ..models import JobApplication
-from ..schemas import JobApplicationOut, JobApplicationUpdate, JobApplicationUpsert, ScoreBreakdownOut
+from ..schemas import JobApplicationOut, JobApplicationUpdate, JobApplicationUpsert, PaginatedApplications, ScoreBreakdownOut
 
 router = APIRouter(tags=["applications"])
 
@@ -110,6 +110,33 @@ def _to_job_application_out(record: JobApplication) -> JobApplicationOut:
     )
 
 
+def _prepare_payload(payload_data: dict, today: str) -> dict:
+    """Compute listing_fingerprint and normalise score_breakdown in place.
+
+    Called by both create_application and upsert_application so the logic
+    lives in exactly one place.
+    """
+    if not payload_data.get("listing_fingerprint"):
+        payload_data["listing_fingerprint"] = _listing_fingerprint(
+            [
+                payload_data.get("company", ""),
+                payload_data.get("role", ""),
+                payload_data.get("link", ""),
+                payload_data.get("source", ""),
+                payload_data.get("fit", ""),
+                str(payload_data.get("fit_score", "")),
+                payload_data.get("notes", ""),
+            ]
+        )
+    # Extract scoring JSON from change_note into the dedicated column
+    # (backward compat: new engine sends score_breakdown directly)
+    if not payload_data.get("score_breakdown") and _is_scoring_json(payload_data.get("change_note", "")):
+        payload_data["score_breakdown"] = payload_data["change_note"]
+    # Normalise incoming JSON string to dict before any DB write
+    payload_data["score_breakdown"] = _normalize_score_breakdown(payload_data.get("score_breakdown"))
+    return payload_data
+
+
 def find_existing_application(db: Session, company: str, role: str, link: str) -> JobApplication | None:
     existing = None
     if link:
@@ -131,7 +158,7 @@ def find_existing_application(db: Session, company: str, role: str, link: str) -
 
 @router.get(
     "/applications",
-    response_model=list[JobApplicationOut],
+    response_model=PaginatedApplications,
     summary="List tracked job applications",
 )
 def list_applications(
@@ -141,7 +168,7 @@ def list_applications(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0, le=100_000),
     db: Session = Depends(get_db),
-) -> list[JobApplicationOut]:
+) -> PaginatedApplications:
     query = db.query(JobApplication)
 
     if status:
@@ -155,8 +182,14 @@ def list_applications(
     if min_fit_score is not None:
         query = query.filter(JobApplication.fit_score >= min_fit_score)
 
+    total = query.count()
     rows = query.order_by(JobApplication.fit_score.desc(), JobApplication.id.asc()).offset(offset).limit(limit).all()
-    return [_to_job_application_out(row) for row in rows]
+    return PaginatedApplications(
+        items=[_to_job_application_out(row) for row in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.post(
@@ -182,26 +215,7 @@ def create_application(
         payload_data["first_seen_at"] = today
     if not payload_data.get("last_seen_at"):
         payload_data["last_seen_at"] = today
-    if not payload_data.get("listing_fingerprint"):
-        payload_data["listing_fingerprint"] = _listing_fingerprint(
-            [
-                payload_data.get("company", ""),
-                payload_data.get("role", ""),
-                payload_data.get("link", ""),
-                payload_data.get("source", ""),
-                payload_data.get("fit", ""),
-                str(payload_data.get("fit_score", "")),
-                payload_data.get("notes", ""),
-            ]
-        )
-
-    # Extract scoring JSON from change_note into dedicated column (backward compat only;
-    # new engine sends score_breakdown directly so only copy when not already provided)
-    if not payload_data.get("score_breakdown") and _is_scoring_json(payload_data.get("change_note", "")):
-        payload_data["score_breakdown"] = payload_data["change_note"]
-
-    # Normalize to dict before storing (JSON column; incoming value is a JSON string from the engine)
-    payload_data["score_breakdown"] = _normalize_score_breakdown(payload_data.get("score_breakdown"))
+    _prepare_payload(payload_data, today)
 
     record = JobApplication(**payload_data)
     db.add(record)
@@ -232,26 +246,7 @@ def upsert_application(
 
     if not payload_data.get("last_seen_at"):
         payload_data["last_seen_at"] = today
-    if not payload_data.get("listing_fingerprint"):
-        payload_data["listing_fingerprint"] = _listing_fingerprint(
-            [
-                payload_data.get("company", ""),
-                payload_data.get("role", ""),
-                payload_data.get("link", ""),
-                payload_data.get("source", ""),
-                payload_data.get("fit", ""),
-                str(payload_data.get("fit_score", "")),
-                payload_data.get("notes", ""),
-            ]
-        )
-
-    # Extract scoring JSON into dedicated column so it survives change_note overwrite
-    # (backward compat: new engine sends score_breakdown directly)
-    if not payload_data.get("score_breakdown") and _is_scoring_json(payload_data.get("change_note", "")):
-        payload_data["score_breakdown"] = payload_data["change_note"]
-
-    # Normalize incoming JSON string to dict before any DB write
-    payload_data["score_breakdown"] = _normalize_score_breakdown(payload_data.get("score_breakdown"))
+    _prepare_payload(payload_data, today)
 
     record = find_existing_application(db, company=payload.company, role=payload.role, link=payload.link)
 

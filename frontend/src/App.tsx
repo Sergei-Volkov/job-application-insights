@@ -57,7 +57,7 @@ export default function App() {
   const loadDashboard = (): Promise<void> => {
     setError(null)
     return fetchApplications()
-      .then((a) => setApplications(a))
+      .then((res) => setApplications(res.items))
       .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Failed to load data'))
       .finally(() => setLoading(false))
   }

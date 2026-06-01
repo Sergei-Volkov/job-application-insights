@@ -89,6 +89,13 @@ class JobApplicationUpsert(BaseModel):
         return v
 
 
+class PaginatedApplications(BaseModel):
+    items: list[JobApplicationOut]
+    total: int
+    limit: int
+    offset: int
+
+
 class SkillGapItem(BaseModel):
     skill: str
     count: int
