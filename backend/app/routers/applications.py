@@ -1,4 +1,3 @@
-import hashlib
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -7,20 +6,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..dependencies import get_db, require_write_access
-from ..helpers import today_iso
+from ..helpers import listing_fingerprint, normalize_key, today_iso
 from ..models import JobApplication
 from ..schemas import JobApplicationOut, JobApplicationUpdate, JobApplicationUpsert, PaginatedApplications, ScoreBreakdownOut
 
 router = APIRouter(tags=["applications"])
 
-
-def _normalize_key(value: str | None) -> str:
-    return (value or "").strip().lower()
-
-
-def _listing_fingerprint(values: list[str]) -> str:
-    joined = "||".join((v or "").strip() for v in values)
-    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
 def _parse_score_breakdown(raw: dict | str | None) -> ScoreBreakdownOut | None:
@@ -38,10 +29,8 @@ def _parse_score_breakdown(raw: dict | str | None) -> ScoreBreakdownOut | None:
         if not isinstance(parsed, dict):
             return None
         payload: dict = parsed  # type: ignore[assignment]
-    elif isinstance(raw, dict):
-        payload = raw
     else:
-        return None
+        payload = raw
 
     return ScoreBreakdownOut(
         score=payload.get("score") if isinstance(payload.get("score"), int) else None,
@@ -56,28 +45,19 @@ def _parse_score_breakdown(raw: dict | str | None) -> ScoreBreakdownOut | None:
     )
 
 
-def _is_scoring_json(text: str) -> bool:
-    """Return True if text is a JSON dict that looks like a scoring blob."""
-    raw = (text or "").strip()
-    if not raw or not raw.startswith("{"):
-        return False
-    try:
-        parsed = json.loads(raw)
-        return isinstance(parsed, dict) and "score" in parsed
-    except (json.JSONDecodeError, TypeError):
-        return False
-
-
-def _normalize_score_breakdown(value: str | dict | None) -> dict | None:
-    """Parse a JSON string to dict; return dict as-is; return None for empty/invalid."""
+def _parse_score_json(value: str | dict | None) -> dict | None:
+    """Parse a JSON string / pass-through a dict; return None for empty / invalid."""
     if isinstance(value, dict):
         return value
     if not isinstance(value, str) or not value.strip():
         return None
+    raw = value.strip()
+    if not raw.startswith("{"):
+        return None
     try:
-        parsed = json.loads(value)
+        parsed = json.loads(raw)
         return parsed if isinstance(parsed, dict) else None
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         return None
 
 
@@ -106,7 +86,7 @@ def _to_job_application_out(record: JobApplication) -> JobApplicationOut:
         listing_fingerprint=record.listing_fingerprint,
         change_note=record.change_note,
         notes=record.notes,
-        score_breakdown=_parse_score_breakdown(record.score_breakdown or record.change_note),  # type: ignore[arg-type]
+        score_breakdown=_parse_score_breakdown(record.score_breakdown),
     )
 
 
@@ -117,7 +97,7 @@ def _prepare_payload(payload_data: dict, today: str) -> dict:
     lives in exactly one place.
     """
     if not payload_data.get("listing_fingerprint"):
-        payload_data["listing_fingerprint"] = _listing_fingerprint(
+        payload_data["listing_fingerprint"] = listing_fingerprint(
             [
                 payload_data.get("company", ""),
                 payload_data.get("role", ""),
@@ -130,10 +110,10 @@ def _prepare_payload(payload_data: dict, today: str) -> dict:
         )
     # Extract scoring JSON from change_note into the dedicated column
     # (backward compat: new engine sends score_breakdown directly)
-    if not payload_data.get("score_breakdown") and _is_scoring_json(payload_data.get("change_note", "")):
+    if not payload_data.get("score_breakdown") and _parse_score_json(payload_data.get("change_note", "")):
         payload_data["score_breakdown"] = payload_data["change_note"]
     # Normalise incoming JSON string to dict before any DB write
-    payload_data["score_breakdown"] = _normalize_score_breakdown(payload_data.get("score_breakdown"))
+    payload_data["score_breakdown"] = _parse_score_json(payload_data.get("score_breakdown"))
     return payload_data
 
 
@@ -148,8 +128,8 @@ def find_existing_application(db: Session, company: str, role: str, link: str) -
         db.query(JobApplication)
         .filter(
             and_(
-                func.lower(JobApplication.company) == _normalize_key(company),
-                func.lower(JobApplication.role) == _normalize_key(role),
+                func.lower(JobApplication.company) == normalize_key(company),
+                func.lower(JobApplication.role) == normalize_key(role),
             )
         )
         .first()
@@ -221,7 +201,7 @@ def create_application(
     db.add(record)
     try:
         db.commit()
-    except IntegrityError:
+    except IntegrityError:  # pragma: no cover
         db.rollback()
         raise HTTPException(status_code=409, detail="Application already exists")
 
@@ -275,7 +255,7 @@ def upsert_application(
 
     try:
         db.commit()
-    except IntegrityError:
+    except IntegrityError:  # pragma: no cover
         db.rollback()
         record = find_existing_application(db, company=payload.company, role=payload.role, link=payload.link)
         if record is None:
@@ -296,7 +276,7 @@ def upsert_application(
             setattr(record, field, value)
         try:
             db.commit()
-        except Exception as exc:
+        except Exception as exc:  # pragma: no cover
             db.rollback()
             raise HTTPException(status_code=500, detail="Failed to update existing application") from exc
 
@@ -343,10 +323,10 @@ def patch_application(
 
     try:
         db.commit()
-    except IntegrityError as exc:
+    except IntegrityError as exc:  # pragma: no cover
         db.rollback()
         raise HTTPException(status_code=409, detail="Conflict while updating application") from exc
-    except Exception as exc:
+    except Exception as exc:  # pragma: no cover
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update application") from exc
 

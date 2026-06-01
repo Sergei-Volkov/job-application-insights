@@ -10,6 +10,9 @@ This file summarizes the app structure and points discovery readers to the froze
   - `config.py`: runtime settings from env
   - `database.py`, `models.py`, `schemas.py`: data layer and API contracts
   - `dependencies.py`: DB session and write-key guard
+  - `pathing.py`: path resolution helpers and traversal-safety guard (`is_within_path`)
+  - `init_db.py`: Alembic migration runner, called at startup to keep the schema current
+  - `helpers.py`: pure utilities (slugify, date helpers, output truncation)
 
 ## Frontend
 - Path: `frontend/src/`

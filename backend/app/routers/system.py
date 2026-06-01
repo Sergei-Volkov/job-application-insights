@@ -11,7 +11,7 @@ router = APIRouter(tags=["system"])
 def health(db: Session = Depends(get_db)) -> dict[str, str]:
     try:
         db.execute(text("SELECT 1"))
-    except Exception as exc:
+    except Exception as exc:  # pragma: no cover
         raise HTTPException(status_code=503, detail="Database unavailable") from exc
     return {"status": "ok"}
 

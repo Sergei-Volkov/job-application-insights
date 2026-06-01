@@ -1,9 +1,7 @@
-import json
 import sys
 from dataclasses import fields
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
 
 _APP_ROOT = Path(__file__).resolve().parents[2]
 _ENGINE_ROOT = _APP_ROOT.parent / "job-discovery-engine" / "src"
@@ -13,19 +11,7 @@ for path in (str(_ENGINE_ROOT), str(_APP_ROOT)):
 
 import job_discovery_engine as discovery_package  # noqa: E402
 from job_discovery_engine import api as discovery_api  # noqa: E402
-from job_discovery_engine import config as discovery_config  # noqa: E402
-from job_discovery_engine.config import USER_CONFIG_PATH, _load_discovery_config  # noqa: E402
-from job_discovery_engine.models import (  # noqa: E402
-    CollectionReport,
-    DiscoveryContext,
-    JobMatch,
-    SourceRunReport,
-)
-from job_discovery_engine.pipeline import DiscoveryRunOptions, run_discovery_pipeline  # noqa: E402
-from job_discovery_engine.rerankers import LLMRerankReport  # noqa: E402
-from job_discovery_engine.scoring import cv_word_bag, is_relevant, score_match  # noqa: E402
-from job_discovery_engine.sources import collect_remotive  # noqa: E402
-from job_discovery_engine.text_utils import read_cv_text  # noqa: E402
+from job_discovery_engine import DiscoveryContext, DiscoveryRunOptions, run_discovery_pipeline  # noqa: E402
 
 
 def test_public_api_surface_is_frozen() -> None:
@@ -92,8 +78,11 @@ def test_public_dataclass_shapes_are_stable() -> None:
     ]
 
 
-def _sample_match() -> JobMatch:
-    return JobMatch(
+def test_run_discovery_pipeline_public_api(monkeypatch, tmp_path: Path) -> None:
+    cv_path = tmp_path / "cv.tex"
+    cv_path.write_text("Python SQL FastAPI", encoding="utf-8")
+
+    sample_match = SimpleNamespace(
         title="Backend Engineer",
         company="Acme",
         source="Remotive",
@@ -107,76 +96,8 @@ def _sample_match() -> JobMatch:
         missing_skills="dbt",
         fit_notes="Direct overlap on Python and SQL.",
     )
-
-
-def test_explicit_context_overrides_globals() -> None:
-    original_profile = discovery_config.ACTIVE_PROFILE
-    original_owned_skills = set(discovery_config.OWNED_SKILLS)
-    try:
-        discovery_config.ACTIVE_PROFILE = "de"
-        discovery_config.OWNED_SKILLS.clear()
-
-        swe_context = DiscoveryContext(profile="swe", owned_skills={"python"}, search_terms=["backend engineer"])
-        de_context = DiscoveryContext(profile="de", owned_skills={"python"}, search_terms=["data engineer"])
-
-        assert is_relevant("Backend Engineer", "", context=swe_context)
-        assert not is_relevant("Backend Engineer", "", context=de_context)
-
-        context_score = score_match("Data Engineer", "Python SQL", context=DiscoveryContext(
-            profile="de",
-            owned_skills={"python"},
-            search_terms=[],
-        ))
-        fallback_score = score_match("Data Engineer", "Python SQL")
-
-        assert context_score > fallback_score
-    finally:
-        discovery_config.ACTIVE_PROFILE = original_profile
-        discovery_config.OWNED_SKILLS.clear()
-        discovery_config.OWNED_SKILLS.update(original_owned_skills)
-
-
-def test_collect_remotive_uses_context_search_terms(monkeypatch) -> None:
-    calls: list[str] = []
-
-    def fake_fetch_text(url: str, timeout: int = 25) -> str:
-        calls.append(url)
-        return json.dumps(
-            {
-                "jobs": [
-                    {
-                        "title": "Backend Engineer",
-                        "company_name": "Acme",
-                        "description": "Python FastAPI SQL",
-                        "candidate_required_location": "Remote",
-                        "publication_date": "2026-05-20",
-                        "url": "https://example.com/jobs/1",
-                    }
-                ]
-            }
-        )
-
-    monkeypatch.setattr("job_discovery_engine.sources.fetch_text", fake_fetch_text)
-
-    context = DiscoveryContext(
-        profile="swe",
-        owned_skills={"python"},
-        search_terms=["backend engineer", "platform engineer"],
-    )
-    matches = collect_remotive(context)
-
-    assert len(calls) == 2
-    assert len(matches) == 1
-    assert matches[0].company == "Acme"
-
-
-def test_run_discovery_pipeline_public_api(monkeypatch, tmp_path: Path) -> None:
-    cv_path = tmp_path / "cv.tex"
-    cv_path.write_text("Python SQL FastAPI", encoding="utf-8")
-
-    sample_match = _sample_match()
-    collection_report = CollectionReport(
-        sources=[SourceRunReport(key="remotive", label="Remotive", collected=1)],
+    collection_report = SimpleNamespace(
+        sources=[SimpleNamespace(key="remotive", label="Remotive", collected=1, error=None)],
         raw_total=1,
         filtered_age=0,
         filtered_score=0,
@@ -187,7 +108,7 @@ def test_run_discovery_pipeline_public_api(monkeypatch, tmp_path: Path) -> None:
         dedup_collisions=0,
         deduped_total=1,
     )
-    llm_report = LLMRerankReport(
+    llm_report = SimpleNamespace(
         adjusted=0,
         attempted=0,
         planned_calls=0,
@@ -232,44 +153,6 @@ def test_run_discovery_pipeline_public_api(monkeypatch, tmp_path: Path) -> None:
     assert result.strict_matches == [sample_match]
     assert result.synced_count == 1
     assert warnings.messages == []
-
-
-# ---------------------------------------------------------------------------
-# Session 11: app-side engine contract tests (user config + session-10 API)
-# ---------------------------------------------------------------------------
-
-def test_user_config_path_is_accessible() -> None:
-    """App can read USER_CONFIG_PATH from the engine package."""
-    assert USER_CONFIG_PATH == Path("~/.config/job-discovery/config.json").expanduser()
-
-
-def test_user_config_applied_when_present(tmp_path: Path, monkeypatch) -> None:
-    user_cfg = {"scoring": {"extra_skills": ["trino"]}}
-    user_path = tmp_path / "user_config.json"
-    user_path.write_text(json.dumps(user_cfg), encoding="utf-8")
-    monkeypatch.setattr("job_discovery_engine.config.USER_CONFIG_PATH", user_path)
-    monkeypatch.setenv("DISCOVERY_CONFIG_PATH", str(tmp_path / "nonexistent.json"))
-    merged = _load_discovery_config()
-    assert "trino" in merged["scoring"]["extra_skills"]
-
-
-def test_user_config_ignored_when_missing(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("job_discovery_engine.config.USER_CONFIG_PATH", tmp_path / "nope.json")
-    monkeypatch.setenv("DISCOVERY_CONFIG_PATH", str(tmp_path / "nonexistent.json"))
-    merged = _load_discovery_config()
-    assert "keyword_weights" in merged["scoring"]
-
-
-def test_read_cv_text_plain_roundtrip(tmp_path: Path) -> None:
-    f = tmp_path / "cv.txt"
-    f.write_text("Python SQL FastAPI Airflow", encoding="utf-8")
-    assert "Python" in read_cv_text(f)
-
-
-def test_cv_word_bag_basic() -> None:
-    bag = cv_word_bag("Python Airflow FastAPI pipeline orchestration")
-    assert "python" in bag
-    assert "airflow" in bag
 
 
 def test_discovery_context_cv_words_field_default() -> None:

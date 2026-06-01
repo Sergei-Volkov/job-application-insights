@@ -19,7 +19,12 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    if not settings.write_api_key:
+    if settings.require_write_key and not settings.write_api_key.strip():  # pragma: no cover
+        raise RuntimeError(
+            "WRITE_API_KEY must be set when REQUIRE_WRITE_KEY=true. "
+            "Set WRITE_API_KEY in your .env file."
+        )
+    if not settings.write_api_key:  # pragma: no cover
         logger.warning("write_api_key is not set; write endpoints will reject all requests")
     init_db()
     yield

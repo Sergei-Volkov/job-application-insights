@@ -100,10 +100,6 @@ export interface ApplicationPatch {
   resume_ref?: string
   cover_letter_ref?: string
   match_profile?: string
-  first_seen_at?: string
-  last_seen_at?: string
-  listing_fingerprint?: string
-  change_note?: string
   notes?: string
 }
 

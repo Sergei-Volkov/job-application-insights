@@ -1,5 +1,15 @@
+import hashlib
 from datetime import datetime
 import re
+
+
+def normalize_key(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
+def listing_fingerprint(values: list[str]) -> str:
+    joined = "||" .join((v or "").strip() for v in values)
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
 def summarize_process_output(text: str, max_chars: int) -> str:

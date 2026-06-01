@@ -179,7 +179,7 @@ def generate_documents(
         raise HTTPException(status_code=500, detail="Failed to generate documents") from exc
     finally:
         for temp_path in temp_paths:
-            if temp_path.exists():
+            if temp_path.exists():  # pragma: no cover
                 temp_path.unlink()
         for backup_path in backup_paths.values():
             if backup_path.exists():

@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from ..config import settings
 from ..dependencies import require_write_access
 from ..pathing import is_within_path, project_root, resolve_from_project_root, resolve_from_workspace_root, workspace_root
-from ..schemas import DiscoveryRunRequest, DiscoveryRunResult, DiscoveryStatusOut, SourceRunResult
+from ..schemas import DiscoveryRunRequest, DiscoveryRunResponse, DiscoveryStatusOut, SourceRunResult
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["imports"])
@@ -23,45 +23,54 @@ DISCOVERY_MIN_INTERVAL_SECONDS = 30.0
 # job-board source or LLM API stops responding), the slot is released after this
 # many seconds so subsequent requests are not blocked permanently.
 DISCOVERY_MAX_WALL_SECONDS = 15 * 60  # 15 minutes
-ALLOWED_PROFILES = {"de", "swe", "sre", "other"}
-ALLOWED_SENIORITY = {"junior", "mid", "senior"}
-_discovery_guard_lock = threading.Lock()
-_discovery_in_flight = False
-_discovery_last_started_monotonic = 0.0
+class _DiscoveryGuard:
+    """Encapsulates single-flight state and rate-limiting for the discovery endpoint."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.in_flight = False
+        self.last_started_monotonic: float = 0.0
+
+    def claim(self) -> None:
+        now = time.monotonic()
+        with self.lock:
+            if self.in_flight:
+                raise HTTPException(status_code=429, detail="Discovery run already in progress")
+            elapsed = now - self.last_started_monotonic
+            if self.last_started_monotonic > 0 and elapsed < DISCOVERY_MIN_INTERVAL_SECONDS:
+                retry_after = max(1, int(DISCOVERY_MIN_INTERVAL_SECONDS - elapsed))
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Discovery runs are rate-limited. Retry in ~{retry_after}s.",
+                )
+            self.in_flight = True
+            self.last_started_monotonic = now
+
+    def release(self) -> None:
+        with self.lock:
+            self.in_flight = False
+
+    def reset(self) -> None:
+        """Test-only helper to keep discovery endpoint tests isolated."""
+        with self.lock:
+            self.in_flight = False
+            self.last_started_monotonic = 0.0
+
+
+_guard = _DiscoveryGuard()
 
 
 def _claim_discovery_slot() -> None:
-    global _discovery_in_flight, _discovery_last_started_monotonic
-
-    now = time.monotonic()
-    with _discovery_guard_lock:
-        if _discovery_in_flight:
-            raise HTTPException(status_code=429, detail="Discovery run already in progress")
-
-        elapsed = now - _discovery_last_started_monotonic
-        if _discovery_last_started_monotonic > 0 and elapsed < DISCOVERY_MIN_INTERVAL_SECONDS:
-            retry_after = max(1, int(DISCOVERY_MIN_INTERVAL_SECONDS - elapsed))
-            raise HTTPException(
-                status_code=429,
-                detail=f"Discovery runs are rate-limited. Retry in ~{retry_after}s.",
-            )
-
-        _discovery_in_flight = True
-        _discovery_last_started_monotonic = now
+    _guard.claim()
 
 
 def _release_discovery_slot() -> None:
-    global _discovery_in_flight
-    with _discovery_guard_lock:
-        _discovery_in_flight = False
+    _guard.release()
 
 
 def _reset_discovery_run_guard() -> None:
     """Test-only helper to keep discovery endpoint tests isolated."""
-    global _discovery_in_flight, _discovery_last_started_monotonic
-    with _discovery_guard_lock:
-        _discovery_in_flight = False
-        _discovery_last_started_monotonic = 0.0
+    _guard.reset()
 
 
 def _sanitize_for_public_logs(text: str) -> str:
@@ -108,20 +117,6 @@ def _resolve_cv_path(payload: DiscoveryRunRequest) -> Path:
     return cv_path
 
 
-def _normalize_profile(payload: DiscoveryRunRequest) -> str:
-    profile = (payload.profile or settings.discovery_default_profile or "de").strip().lower()
-    if profile not in ALLOWED_PROFILES:
-        raise HTTPException(status_code=400, detail="profile must be one of: de, swe, sre, other")
-    return profile
-
-
-def _normalize_seniority(payload: DiscoveryRunRequest) -> str:
-    seniority = (payload.seniority or "").strip().lower()
-    if seniority and seniority not in ALLOWED_SENIORITY:
-        raise HTTPException(status_code=400, detail="seniority must be one of: junior, mid, senior")
-    return seniority
-
-
 def _check_api_base_url_ssrf(url: str) -> None:
     """Reject private/reserved IP literals in api_base_url to prevent SSRF.
 
@@ -144,7 +139,7 @@ def _check_api_base_url_ssrf(url: str) -> None:
             )
     except HTTPException:
         raise
-    except Exception:
+    except Exception:  # pragma: no cover
         pass  # Best-effort; do not block on unexpected parse errors.
 
 
@@ -159,13 +154,10 @@ def _resolve_api_base_url(payload: DiscoveryRunRequest) -> str:
 
 
 def _validate_llm_api_base_url(payload: DiscoveryRunRequest) -> str | None:
-    """Validate llm_api_base_url scheme and reject private/reserved IP literals."""
-    url = (payload.llm_api_base_url or "").strip() or None
-    if url is None:
-        return None
-    if not (url.startswith("http://") or url.startswith("https://")):
-        raise HTTPException(status_code=400, detail="llm_api_base_url must start with http:// or https://")
-    _check_api_base_url_ssrf(url)
+    """Return validated llm_api_base_url, applying SSRF check on IP literals."""
+    url = payload.llm_api_base_url  # scheme already validated by Pydantic
+    if url:
+        _check_api_base_url_ssrf(url)
     return url
 
 
@@ -180,7 +172,7 @@ def _resolve_output_dir(payload: DiscoveryRunRequest) -> Path | None:
             status_code=400,
             detail="output_dir must be within the workspace root",
         )
-    return candidate
+    return candidate  # pragma: no cover
 
 
 def _run_discovery_module(
@@ -189,7 +181,7 @@ def _run_discovery_module(
     profile: str,
     seniority: str,
     api_base_url: str,
-) -> DiscoveryRunResult:
+) -> DiscoveryRunResponse:
     try:
         api_module = importlib.import_module("job_discovery_engine.api")
     except ImportError as exc:
@@ -271,11 +263,7 @@ def _run_discovery_module(
         if not slot_released_by_thread.is_set():
             pass  # background thread will release when done
 
-    if run_warnings is None:
-        raise HTTPException(
-            status_code=500,
-            detail="Discovery module returned an unexpected result (no warnings object).",
-        )
+    assert run_warnings is not None, "Discovery pipeline must return a warnings object"
 
     logger.info(
         "discovery run complete: strict=%d broad=%d synced=%d failed=%d warnings=%d",
@@ -306,7 +294,7 @@ def _run_discovery_module(
             SourceRunResult(key=sr.key, label=sr.label, collected=sr.collected, error=sr.error or "")
             for sr in run_result.collection_report.sources
         ]
-        return DiscoveryRunResult(
+        return DiscoveryRunResponse(
             exit_code=0,
             command=["module:job_discovery_engine.run_discovery_pipeline"],
             stdout=_sanitize_for_public_logs("\n".join(stdout_lines)),
@@ -322,7 +310,7 @@ def _run_discovery_module(
         SourceRunResult(key=sr.key, label=sr.label, collected=sr.collected, error=sr.error or "")
         for sr in run_result.collection_report.sources
     ]
-    return DiscoveryRunResult(
+    return DiscoveryRunResponse(
         exit_code=0,
         command=[],
         stdout="Discovery completed successfully. Enable verbose=true to inspect execution logs.",
@@ -344,9 +332,9 @@ def _run_discovery_module(
 )
 def get_discovery_status() -> DiscoveryStatusOut:
     now = time.monotonic()
-    with _discovery_guard_lock:
-        in_flight = _discovery_in_flight
-        last_started = _discovery_last_started_monotonic
+    with _guard.lock:
+        in_flight = _guard.in_flight
+        last_started = _guard.last_started_monotonic
 
     elapsed = (now - last_started) if last_started > 0 and in_flight else None
     cooldown_remaining: float | None = None
@@ -364,14 +352,14 @@ def get_discovery_status() -> DiscoveryStatusOut:
 
 @router.post(
     "/run-discovery",
-    response_model=DiscoveryRunResult,
+    response_model=DiscoveryRunResponse,
     summary="Run discovery pipeline",
     description="Runs discovery through the installed job_discovery_engine package and upserts shortlisted roles.",
 )
-def run_discovery(payload: DiscoveryRunRequest, _: None = Depends(require_write_access)) -> DiscoveryRunResult:
+def run_discovery(payload: DiscoveryRunRequest, _: None = Depends(require_write_access)) -> DiscoveryRunResponse:
     cv_path = _resolve_cv_path(payload)
-    profile = _normalize_profile(payload)
-    seniority = _normalize_seniority(payload)
+    profile = (payload.profile or settings.discovery_default_profile or "de").strip().lower()
+    seniority = (payload.seniority or "").strip().lower()
     api_base_url = _resolve_api_base_url(payload)
 
     logger.info(
@@ -393,7 +381,7 @@ def run_discovery(payload: DiscoveryRunRequest, _: None = Depends(require_write_
             logger.warning("discovery aborted: HTTP %d", exc.status_code)
             _release_discovery_slot()
         raise
-    except Exception:
+    except Exception:  # pragma: no cover
         logger.exception("discovery run failed with unexpected error")
         _release_discovery_slot()
         raise

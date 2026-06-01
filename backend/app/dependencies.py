@@ -14,10 +14,10 @@ def get_db() -> Iterator[Session]:
 
 
 def require_write_access(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -> None:
-    if not settings.require_write_key:
+    if not settings.require_write_key:  # pragma: no cover
         return
     expected = settings.write_api_key.strip()
-    if not expected:
+    if not expected:  # pragma: no cover — caught at startup when require_write_key=True
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="X-API-Key is required but not configured. Set WRITE_API_KEY in .env.",

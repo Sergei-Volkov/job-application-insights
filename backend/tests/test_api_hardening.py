@@ -770,9 +770,9 @@ def test_discovery_status_cooldown() -> None:
     import time
     from app.routers import discovery as dr
     # Simulate a completed run that just finished
-    with dr._discovery_guard_lock:
-        dr._discovery_in_flight = False
-        dr._discovery_last_started_monotonic = time.monotonic()  # set to "just now"
+    with dr._guard.lock:
+        dr._guard.in_flight = False
+        dr._guard.last_started_monotonic = time.monotonic()  # set to "just now"
     response = client.get("/discovery/status")
     assert response.status_code == 200
     data = response.json()
@@ -935,8 +935,8 @@ def test_run_discovery_requires_write_key() -> None:
     assert response.status_code == 401
 
 
-def test_run_discovery_invalid_profile_returns_400() -> None:
-    """POST /run-discovery returns 400 for a profile value not in {de, swe, sre, other}."""
+def test_run_discovery_invalid_profile_returns_422() -> None:
+    """POST /run-discovery returns 422 for a profile value not in {de, swe, sre, other}."""
     _reset_discovery_guard()
     response = client.post(
         "/run-discovery",
@@ -949,8 +949,10 @@ def test_run_discovery_invalid_profile_returns_400() -> None:
         },
         headers=_auth_headers(),
     )
-    assert response.status_code == 400
-    assert "profile" in response.json()["detail"].lower()
+    assert response.status_code == 422
+    body = response.json()
+    # Pydantic validation error — detail is a list of error objects
+    assert any("profile" in str(err).lower() for err in body["detail"])
 
 
 def test_run_discovery_cv_path_outside_workspace_returns_400() -> None:
@@ -1045,8 +1047,8 @@ def test_claim_discovery_slot_rejects_concurrent_run() -> None:
     _reset_discovery_guard()
     from app.routers import discovery as dr
 
-    with dr._discovery_guard_lock:
-        dr._discovery_in_flight = True
+    with dr._guard.lock:
+        dr._guard.in_flight = True
 
     try:
         response = client.post(
@@ -1135,3 +1137,551 @@ def test_workspace_file_write_above_limit_is_rejected() -> None:
         headers=_auth_headers(),
     )
     assert response.status_code == 422
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Option B: Integration tests – coverage for previously untested code paths
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_analytics_missing_skills_section_truncation() -> None:
+    """GET /missing-skills truncates the raw text at the next section header."""
+    _clear_db()
+    client.post(
+        "/applications/upsert",
+        json=_base_payload(
+            notes="Summary\nMissing or adjacent tools: dbt, Spark\nNext Steps: submit tomorrow",
+        ),
+        headers=_auth_headers(),
+    )
+    resp = client.get("/missing-skills")
+    assert resp.status_code == 200
+    skills = {item["skill"] for item in resp.json()["items"]}
+    assert "dbt" in skills
+    assert "Spark" in skills
+    # Nothing from the section that follows the skills list should appear
+    assert not any(s in {"Next Steps", "submit", "tomorrow"} for s in skills)
+
+
+def test_analytics_trend_whitespace_date_found() -> None:
+    """GET /trend skips records where date_found is whitespace-only."""
+    _clear_db()
+    client.post(
+        "/applications/upsert",
+        json=_base_payload(date_found="   "),
+        headers=_auth_headers(),
+    )
+    resp = client.get("/trend")
+    assert resp.status_code == 200
+    assert resp.json()["items"] == []
+
+
+def test_analytics_trend_bad_date_format() -> None:
+    """GET /trend skips records where date_found is not a valid YYYY-MM-DD date."""
+    _clear_db()
+    client.post(
+        "/applications/upsert",
+        json=_base_payload(date_found="not-a-date"),
+        headers=_auth_headers(),
+    )
+    resp = client.get("/trend")
+    assert resp.status_code == 200
+    assert resp.json()["items"] == []
+
+
+def test_list_applications_source_filter() -> None:
+    """GET /applications?source=... filters results by the source field."""
+    _clear_db()
+    client.post(
+        "/applications/upsert",
+        json={"company": "Remotive Corp", "role": "Engineer", "link": "https://example.com/job/src-remotive", "source": "remotive"},
+        headers=_auth_headers(),
+    )
+    client.post(
+        "/applications/upsert",
+        json={"company": "LinkedIn Corp", "role": "Engineer", "link": "https://example.com/job/src-linkedin", "source": "linkedin"},
+        headers=_auth_headers(),
+    )
+    resp = client.get("/applications?source=remotive&limit=50")
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert len(items) == 1
+    assert items[0]["source"] == "remotive"
+
+
+def test_list_applications_min_fit_score_filter() -> None:
+    """GET /applications?min_fit_score=... returns only records at or above the threshold."""
+    _clear_db()
+    client.post(
+        "/applications/upsert",
+        json={"company": "HiScore Inc", "role": "Engineer", "link": "https://example.com/job/hi-score", "fit_score": 8},
+        headers=_auth_headers(),
+    )
+    client.post(
+        "/applications/upsert",
+        json={"company": "LoScore Inc", "role": "Engineer", "link": "https://example.com/job/lo-score", "fit_score": 3},
+        headers=_auth_headers(),
+    )
+    resp = client.get("/applications?min_fit_score=5&limit=50")
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert len(items) == 1
+    assert items[0]["fit_score"] == 8
+
+
+def test_upsert_preserves_change_note_same_fingerprint() -> None:
+    """Upserting with the same fingerprint and no incoming change_note preserves the original."""
+    _clear_db()
+    client.post(
+        "/applications/upsert",
+        json=_base_payload(listing_fingerprint="fp-stable", change_note="original note"),
+        headers=_auth_headers(),
+    )
+    resp = client.post(
+        "/applications/upsert",
+        json=_base_payload(listing_fingerprint="fp-stable"),
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["change_note"] == "original note"
+
+
+def test_parse_score_json_non_dict_string() -> None:
+    """Upserting with a non-JSON score_breakdown string normalises it to None."""
+    _clear_db()
+    resp = client.post(
+        "/applications/upsert",
+        json=_base_payload(score_breakdown="plain text, not JSON"),
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["score_breakdown"] is None
+
+
+def test_parse_score_json_invalid_json() -> None:
+    """A change_note that opens with '{' but is not valid JSON does not become score_breakdown."""
+    _clear_db()
+    resp = client.post(
+        "/applications/upsert",
+        json=_base_payload(change_note='{"broken json'),
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["score_breakdown"] is None
+
+
+def test_run_discovery_cv_path_not_found() -> None:
+    """POST /run-discovery returns 400 when cv_path resolves within the workspace but the file is absent."""
+    _reset_discovery_guard()
+    resp = client.post(
+        "/run-discovery",
+        json={
+            "limit": 5,
+            "min_score": 1,
+            "max_age_days": 10,
+            "include_stretch": False,
+            "cv_path": "applications/resumes/no_such_file.tex",
+        },
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 400
+    assert "Discovery CV not found" in resp.json()["detail"]
+
+
+def test_run_discovery_no_cv_path_configured() -> None:
+    """POST /run-discovery returns 400 when neither cv_path nor DISCOVERY_CV_PATH is set."""
+    _reset_discovery_guard()
+    from app.config import settings as _settings
+
+    with patch.object(_settings, "discovery_cv_path", ""):
+        resp = client.post(
+            "/run-discovery",
+            json={"limit": 5, "min_score": 1, "max_age_days": 10, "include_stretch": False},
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 400
+    assert "CV path is missing" in resp.json()["detail"]
+
+
+def test_run_discovery_missing_api_base_url() -> None:
+    """POST /run-discovery returns 400 when api_base_url is absent and no env fallback is configured."""
+    _reset_discovery_guard()
+    from app.config import settings as _settings
+
+    with patch.object(_settings, "discovery_api_base_url", ""):
+        resp = client.post(
+            "/run-discovery",
+            json={"limit": 5, "min_score": 1, "max_age_days": 10, "include_stretch": False},
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 400
+    assert "api_base_url is missing" in resp.json()["detail"]
+
+
+def test_run_discovery_bad_scheme_api_base_url() -> None:
+    """POST /run-discovery returns 400 when api_base_url uses an unsupported scheme."""
+    _reset_discovery_guard()
+    resp = client.post(
+        "/run-discovery",
+        json={
+            "limit": 5,
+            "min_score": 1,
+            "max_age_days": 10,
+            "include_stretch": False,
+            "api_base_url": "ftp://example.com/api",
+        },
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 400
+    assert "http" in resp.json()["detail"]
+
+
+def test_run_discovery_output_dir_traversal() -> None:
+    """POST /run-discovery returns 400 when output_dir would escape the workspace root."""
+    _reset_discovery_guard()
+    resp = client.post(
+        "/run-discovery",
+        json={
+            "limit": 5,
+            "min_score": 1,
+            "max_age_days": 10,
+            "include_stretch": False,
+            "api_base_url": "http://127.0.0.1:8000",
+            "output_dir": "../../../../tmp",
+        },
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 400
+    assert "output_dir" in resp.json()["detail"].lower()
+
+
+def test_run_discovery_with_sources() -> None:
+    """POST /run-discovery passes a normalised sources list to the engine."""
+    _clear_db()
+    _reset_discovery_guard()
+
+    captured: dict[str, object] = {}
+
+    class FakeOptions:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    fake_result = SimpleNamespace(
+        strict_matches=[],
+        broad_matches=[],
+        llm_report=SimpleNamespace(dry_run=False, planned_calls=0, attempted=0, adjusted=0, used_input_chars=0),
+        synced_count=0,
+        failed_rows=[],
+        collection_report=SimpleNamespace(sources=[]),
+    )
+    fake_warnings = SimpleNamespace(messages=[])
+    fake_module = SimpleNamespace(
+        DiscoveryRunOptions=FakeOptions,
+        run_discovery_pipeline=lambda options: (fake_result, fake_warnings),
+    )
+
+    with patch("app.routers.discovery.importlib.import_module", return_value=fake_module):
+        resp = client.post(
+            "/run-discovery",
+            json={
+                "limit": 5,
+                "min_score": 1,
+                "max_age_days": 10,
+                "include_stretch": False,
+                "api_base_url": "http://127.0.0.1:8000",
+                "sources": ["remotive", "  WeWorkRemotely  "],
+            },
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 200
+    assert captured.get("sources") == ["remotive", "weworkremotely"]
+
+
+def test_run_discovery_timeout_returns_504() -> None:
+    """POST /run-discovery returns 504 when the pipeline exceeds the wall-clock timeout."""
+    _clear_db()
+    _reset_discovery_guard()
+
+    import concurrent.futures as _cf
+    from unittest.mock import MagicMock
+
+    mock_future = MagicMock()
+    mock_future.result.side_effect = _cf.TimeoutError()
+    mock_executor = MagicMock()
+    mock_executor.submit.return_value = mock_future
+
+    class FakeOptions:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+    fake_result = SimpleNamespace(
+        strict_matches=[],
+        broad_matches=[],
+        llm_report=SimpleNamespace(dry_run=False, planned_calls=0, attempted=0, adjusted=0, used_input_chars=0),
+        synced_count=0,
+        failed_rows=[],
+        collection_report=SimpleNamespace(sources=[]),
+    )
+    fake_warnings = SimpleNamespace(messages=[])
+    fake_module = SimpleNamespace(
+        DiscoveryRunOptions=FakeOptions,
+        run_discovery_pipeline=lambda options: (fake_result, fake_warnings),
+    )
+
+    with patch("app.routers.discovery.importlib.import_module", return_value=fake_module), \
+         patch.object(_cf, "ThreadPoolExecutor", return_value=mock_executor):
+            resp = client.post(
+                "/run-discovery",
+                json={
+                    "limit": 5,
+                    "min_score": 1,
+                    "max_age_days": 10,
+                    "include_stretch": False,
+                    "api_base_url": "http://127.0.0.1:8000",
+                },
+                headers=_auth_headers(),
+            )
+
+    assert resp.status_code == 504
+    assert "timed out" in resp.json()["detail"].lower()
+    _reset_discovery_guard()
+
+
+def test_workspace_file_rejects_unsupported_extension() -> None:
+    """GET /workspace-file returns 400 for a file extension not in the allowed set."""
+    from app.pathing import workspace_root
+
+    ws_root = workspace_root()
+    target = _APPLICATIONS_ROOT / "script.py"
+    rel_path = str(target.relative_to(ws_root))
+    resp = client.get("/workspace-file", params={"path": rel_path}, headers=_auth_headers())
+    assert resp.status_code == 400
+    assert "Unsupported file extension" in resp.json()["detail"]
+
+
+def test_generate_documents_app_not_found() -> None:
+    """POST /applications/{id}/generate-documents returns 404 for a non-existent application."""
+    resp = client.post(
+        "/applications/99999/generate-documents",
+        json={"overwrite": True},
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Application not found"
+
+
+def test_generate_documents_template_dir_missing() -> None:
+    """POST generate-documents returns 500 when the configured template directory does not exist."""
+    _clear_db()
+    created = client.post(
+        "/applications/upsert",
+        json=_base_payload(link="https://example.com/job/tmpl-dir-missing"),
+        headers=_auth_headers(),
+    )
+    assert created.status_code == 200
+    app_id = created.json()["id"]
+
+    from app.config import settings as _settings
+
+    with patch.object(_settings, "vacancies_template_dir", "/nonexistent/template/dir"):
+        resp = client.post(
+            f"/applications/{app_id}/generate-documents",
+            json={"overwrite": True},
+            headers=_auth_headers(),
+        )
+    assert resp.status_code == 500
+    assert "Template directory not found" in resp.json()["detail"]
+
+
+def test_generate_documents_template_file_missing() -> None:
+    """POST generate-documents returns 500 when a required template file is missing."""
+    _clear_db()
+    created = client.post(
+        "/applications/upsert",
+        json=_base_payload(link="https://example.com/job/tmpl-file-missing"),
+        headers=_auth_headers(),
+    )
+    assert created.status_code == 200
+    app_id = created.json()["id"]
+
+    vacancy_tmpl = _TEMPLATE_DIR / "vacancy.md"
+    vacancy_tmpl_bak = _TEMPLATE_DIR / "_vacancy.md.bak"
+    vacancy_tmpl.rename(vacancy_tmpl_bak)
+    try:
+        resp = client.post(
+            f"/applications/{app_id}/generate-documents",
+            json={"overwrite": True},
+            headers=_auth_headers(),
+        )
+        assert resp.status_code == 500
+        assert "Required template file not found" in resp.json()["detail"]
+    finally:
+        vacancy_tmpl_bak.rename(vacancy_tmpl)
+
+
+def test_generate_documents_restores_backup_on_failure() -> None:
+    """generate-documents restores backup files when db.commit raises after files already exist."""
+    _clear_db()
+    target_dir = _APPLICATIONS_ROOT / "vacancies" / "restore_inc_restore_tester"
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+
+    created = client.post(
+        "/applications/upsert",
+        json=_base_payload(
+            company="Restore Inc",
+            role="Restore Tester",
+            link="https://example.com/job/restore-backup-test",
+        ),
+        headers=_auth_headers(),
+    )
+    assert created.status_code == 200
+    app_id = created.json()["id"]
+
+    # First generate: create the target files
+    first = client.post(
+        f"/applications/{app_id}/generate-documents",
+        json={"overwrite": False},
+        headers=_auth_headers(),
+    )
+    assert first.status_code == 200
+    assert target_dir.exists()
+
+    # Second generate: overwrite=True, but commit fails — backups are restored
+    with patch("app.routers.workspace.Session.commit", side_effect=RuntimeError("forced failure")):
+        second = client.post(
+            f"/applications/{app_id}/generate-documents",
+            json={"overwrite": True},
+            headers=_auth_headers(),
+        )
+    assert second.status_code == 500
+    # Original files should be restored from backup (covers workspace.py line 176)
+    assert (target_dir / "vacancy.md").exists()
+
+
+def test_workspace_file_not_found() -> None:
+    """GET /workspace-file returns 404 when the target file does not exist."""
+    from app.pathing import workspace_root
+
+    ws_root = workspace_root()
+    target = _APPLICATIONS_ROOT / "does_not_exist_at_all.md"
+    rel_path = str(target.relative_to(ws_root))
+    resp = client.get("/workspace-file", params={"path": rel_path}, headers=_auth_headers())
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "File not found"
+
+
+def test_upsert_validates_link_empty() -> None:
+    """Upsert with an explicit empty link is accepted (validator early-return path)."""
+    _clear_db()
+    resp = client.post(
+        "/applications/upsert",
+        json={"company": "LinklessCorps", "role": "Dev", "link": ""},
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["link"] == ""
+
+
+def test_upsert_validates_link_bad_scheme() -> None:
+    """Upsert with a link that has an unsupported URL scheme returns 422."""
+    _clear_db()
+    resp = client.post(
+        "/applications/upsert",
+        json=_base_payload(link="ftp://invalid.example.com/job/1"),
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 422
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Option A: Unit tests – pure functions and Pydantic schema validators
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_pure_function_edge_cases() -> None:
+    """Unit coverage for helpers, pathing, and applications-layer pure functions."""
+    # helpers.summarize_process_output ────────────────────────────────────────
+    assert summarize_process_output("", 10) == ""        # empty → early return
+    assert summarize_process_output("   ", 10) == ""     # whitespace-only → early return
+    assert summarize_process_output("hello", 0) == ""    # max_chars=0 → early return
+    assert summarize_process_output("hello", -1) == ""   # max_chars<0 → early return
+    # max_chars too small for the truncation marker (marker is 26 chars; need >28)
+    assert summarize_process_output("A" * 100, 5) == "A" * 5
+
+    # pathing.resolve_from_project_root ───────────────────────────────────────
+    from app.pathing import project_root, resolve_from_project_root
+
+    result = resolve_from_project_root("relative/path")
+    assert result == (project_root() / "relative/path").resolve()
+
+    # pathing.resolve_from_applications_root (already-rooted path) ────────────
+    from app.config import settings as _settings
+    from app.pathing import resolve_from_applications_root, workspace_root
+
+    with patch.object(_settings, "applications_root", "applications"):
+        result2 = resolve_from_applications_root("applications/vacancies")
+        expected = (workspace_root() / "applications/vacancies").resolve()
+        assert result2 == expected
+
+    # applications._parse_score_breakdown ─────────────────────────────────────
+    from app.routers.applications import _parse_score_breakdown
+
+    assert _parse_score_breakdown(None) is None
+    assert _parse_score_breakdown("") is None            # empty string → early return
+    assert _parse_score_breakdown("   ") is None         # whitespace-only → early return
+    sb_json = (
+        '{"score": 7, "fit": "Good", "matched_keywords": ["Python"], '
+        '"missing_skills": [], "fit_notes": "direct overlap"}'
+    )
+    result3 = _parse_score_breakdown(sb_json)
+    assert result3 is not None
+    assert result3.score == 7
+    assert _parse_score_breakdown('{"broken') is None       # JSONDecodeError path
+    assert _parse_score_breakdown("[1, 2, 3]") is None      # valid JSON but not a dict
+
+    # applications._parse_score_json ──────────────────────────────────────────
+    from app.routers.applications import _parse_score_json
+
+    d: dict = {"score": 1}
+    assert _parse_score_json(d) is d  # dict pass-through
+
+
+def test_schema_validators_unit() -> None:
+    """Unit coverage for Pydantic field validators that are not reachable via the API alone."""
+    from pydantic import ValidationError
+
+    from app.schemas import DiscoveryRunRequest, JobApplicationUpsert
+
+    # _validate_link: empty string → early return (line 85)
+    m1 = JobApplicationUpsert(company="A", role="B", link="")
+    assert m1.link == ""
+
+    # _validate_link: unsupported scheme → raises ValueError (line 88)
+    try:
+        JobApplicationUpsert(company="A", role="B", link="ftp://bad.example.com")
+        assert False, "Expected ValidationError"
+    except ValidationError:
+        pass
+
+    # _validate_seniority: None explicitly provided → early return (line 171)
+    m2 = DiscoveryRunRequest(seniority=None)
+    assert m2.seniority is None
+
+    # _validate_seniority: invalid value → raises ValueError (line 174)
+    try:
+        DiscoveryRunRequest(seniority="vp")
+        assert False, "Expected ValidationError"
+    except ValidationError:
+        pass
+
+    # _validate_llm_api_base_url: None explicitly provided → early return (line 181)
+    m3 = DiscoveryRunRequest(llm_api_base_url=None)
+    assert m3.llm_api_base_url is None
+
+    # _validate_llm_api_base_url: unsupported scheme → raises ValueError (line 184)
+    try:
+        DiscoveryRunRequest(llm_api_base_url="ftp://bad.example.com")
+        assert False, "Expected ValidationError"
+    except ValidationError:
+        pass

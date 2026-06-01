@@ -156,6 +156,34 @@ class DiscoveryRunRequest(BaseModel):
     verbose: bool = False
     sources: list[str] | None = None
 
+    @field_validator("profile")
+    @classmethod
+    def _validate_profile(cls, v: str) -> str:
+        v = v.strip().lower()
+        if v not in {"de", "swe", "sre", "other"}:
+            raise ValueError("profile must be one of: de, swe, sre, other")
+        return v
+
+    @field_validator("seniority")
+    @classmethod
+    def _validate_seniority(cls, v: str | None) -> str | None:
+        if not v:
+            return v
+        v = v.strip().lower()
+        if v not in {"junior", "mid", "senior"}:
+            raise ValueError("seniority must be one of: junior, mid, senior")
+        return v
+
+    @field_validator("llm_api_base_url")
+    @classmethod
+    def _validate_llm_api_base_url(cls, v: str | None) -> str | None:
+        if not v:
+            return v
+        v = v.strip()
+        if not (v.startswith("http://") or v.startswith("https://")):
+            raise ValueError("llm_api_base_url must start with http:// or https://")
+        return v
+
 
 class SourceRunResult(BaseModel):
     key: str
@@ -164,7 +192,7 @@ class SourceRunResult(BaseModel):
     error: str = ""
 
 
-class DiscoveryRunResult(BaseModel):
+class DiscoveryRunResponse(BaseModel):
     exit_code: int
     command: list[str]
     stdout: str
