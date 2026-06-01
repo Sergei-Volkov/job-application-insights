@@ -461,6 +461,12 @@ def test_health_and_stats_endpoints() -> None:
     assert health.status_code == 200
     assert health.json() == {"status": "ok"}
 
+    ver = client.get("/version")
+    assert ver.status_code == 200
+    assert "version" in ver.json()
+    assert isinstance(ver.json()["version"], str)
+    assert ver.json()["version"]  # non-empty
+
     first = client.post(
         "/applications/upsert",
         json=_base_payload(
