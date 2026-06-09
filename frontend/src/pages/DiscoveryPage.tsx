@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { runDiscovery, fetchDiscoveryStatus, upsertApplication } from '../api'
+import { runDiscovery, fetchDiscoveryStatus, upsertApplication, extractJobFromUrl } from '../api'
 import type { DiscoveryRunResult, DiscoveryStatus } from '../api'
-import { DISCOVERY_SOURCES, SCORE_STRONG_MIN, SCORE_MEDIUM_MIN } from '../appConstants'
+import { DISCOVERY_SOURCES, SCORE_STRONG_MIN, SCORE_MEDIUM_MIN, TRACKER_SEARCH_SEED_KEY } from '../appConstants'
 import type { DiscoveryProfile } from '../appTypes'
 
 const STORAGE_KEYS = {
@@ -51,9 +51,10 @@ type DiscoveryPageProps = {
   setSuccessMessage: (msg: string | null) => void
   setLoading: (loading: boolean) => void
   onRunComplete: () => Promise<void>
+  onOpenTracker: (searchSeed: string) => void
 }
 
-export default function DiscoveryPage({ setError, setSuccessMessage, setLoading, onRunComplete }: DiscoveryPageProps) {
+export default function DiscoveryPage({ setError, setSuccessMessage, setLoading, onRunComplete, onOpenTracker }: DiscoveryPageProps) {
   const [discoveryProfile, setDiscoveryProfile] = useState<DiscoveryProfile>('de')
   const [discoveryParams, setDiscoveryParams] = useState<typeof DEFAULT_DISCOVERY_PARAMS>(() => {
     try {
@@ -75,6 +76,8 @@ export default function DiscoveryPage({ setError, setSuccessMessage, setLoading,
   const [discoveryResult, setDiscoveryResult] = useState<DiscoveryRunResult | null>(null)
   const [cooldownSecsLeft, setCooldownSecsLeft] = useState(0)
   const [manualJobForm, setManualJobForm] = useState({ company: '', role: '', link: '', description: '' })
+  const [ingestingManualUrl, setIngestingManualUrl] = useState(false)
+  const [lastAddedSeed, setLastAddedSeed] = useState('')
   const discoveryPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const pollFailureCountRef = useRef(0)
 
@@ -679,6 +682,12 @@ export default function DiscoveryPage({ setError, setSuccessMessage, setLoading,
       <section className="card">
         <h2>Add Job Manually</h2>
         <p className="subtitle small">Create a new job entry without discovery.</p>
+        <p className="muted-mini" style={{ marginTop: '-4px', marginBottom: '8px' }}>
+          Why manual add is here: Discovery is the intake surface for new opportunities from both automation and manual sourcing.
+        </p>
+        <p className="muted-mini" style={{ marginTop: '-4px', marginBottom: '8px' }}>
+          Duplicate policy: if link is provided, matching uses link only. If link is blank, matching falls back to company + role.
+        </p>
         <div className="toolbar">
           <input
             className="text-input"
@@ -712,12 +721,44 @@ export default function DiscoveryPage({ setError, setSuccessMessage, setLoading,
             style={{ minHeight: '80px' }}
           />
           <button
+            className="secondary-btn"
+            onClick={async () => {
+              const url = manualJobForm.link.trim()
+              if (!url) {
+                setError('Enter a job URL first')
+                return
+              }
+              setIngestingManualUrl(true)
+              setError(null)
+              try {
+                const extracted = await extractJobFromUrl({ url })
+                setManualJobForm((prev) => ({
+                  ...prev,
+                  company: extracted.company || prev.company,
+                  role: extracted.role || prev.role,
+                  description: extracted.description
+                    ? (prev.description.trim() ? `${prev.description.trim()}\n\n${extracted.description}` : extracted.description)
+                    : prev.description,
+                }))
+                setSuccessMessage('URL extracted into manual-add fields')
+              } catch (e) {
+                setError(e instanceof Error ? e.message : 'Failed to extract job URL')
+              } finally {
+                setIngestingManualUrl(false)
+              }
+            }}
+            style={{ marginTop: '8px', marginRight: '8px' }}
+          >
+            {ingestingManualUrl ? 'Ingesting…' : 'Ingest URL'}
+          </button>
+          <button
             className="save-btn"
             onClick={async () => {
               if (manualJobForm.company.trim() && manualJobForm.role.trim()) {
                 try {
                   setError(null)
                   setSuccessMessage(null)
+                  const seed = `${manualJobForm.company.trim()} ${manualJobForm.role.trim()}`.trim()
                   await upsertApplication({
                     company: manualJobForm.company.trim(),
                     role: manualJobForm.role.trim(),
@@ -728,6 +769,7 @@ export default function DiscoveryPage({ setError, setSuccessMessage, setLoading,
                     source: 'manual',
                   })
                   setManualJobForm({ company: '', role: '', link: '', description: '' })
+                  setLastAddedSeed(seed)
                   setLoading(true)
                   void onRunComplete()
                   setSuccessMessage('Job added successfully')
@@ -742,6 +784,19 @@ export default function DiscoveryPage({ setError, setSuccessMessage, setLoading,
           >
             Add job
           </button>
+          {!!lastAddedSeed && (
+            <button
+              className="link-btn"
+              style={{ marginLeft: '10px' }}
+              onClick={() => {
+                localStorage.setItem(TRACKER_SEARCH_SEED_KEY, lastAddedSeed)
+                onOpenTracker(lastAddedSeed)
+              }}
+              title="Open Tracker with a search filter for the newly added role"
+            >
+              Open in Tracker
+            </button>
+          )}
         </div>
       </section>
     </>

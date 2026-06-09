@@ -124,6 +124,7 @@ export default function App() {
               setSuccessMessage={setSuccessMessage}
               setLoading={setLoading}
               onRunComplete={loadDashboard}
+              onOpenTracker={() => setActivePage('pipeline')}
             />
           )}
 

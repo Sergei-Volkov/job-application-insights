@@ -312,6 +312,39 @@ header {
   width: 100%;
 }
 
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 210px;
+}
+
+.row-actions .secondary-btn,
+.row-actions .delete-btn {
+  flex: 0 0 auto;
+}
+
+.row-actions .delete-btn {
+  width: auto;
+  display: inline-flex;
+  align-items: center;
+}
+
+.tracker-job-link,
+.tracker-no-link {
+  white-space: nowrap;
+}
+
+.tracker-no-link {
+  padding: 0 2px;
+}
+
+.delete-confirm .delete-btn {
+  width: auto;
+  display: inline-flex;
+}
+
 .delete-btn:hover {
   background: #fef2f2;
 }
@@ -420,38 +453,6 @@ header {
   background: #fbfdff;
 }
 
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.35);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  padding: 16px;
-  z-index: 1000;
-}
-
-.modal-card {
-  width: min(680px, 100%);
-  max-height: 88vh;
-  overflow: auto;
-  background: #fff;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  padding: 14px;
-}
-
-.modal-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-}
-
-.modal-head h3 {
-  margin: 0;
-  font-size: 1rem;
-}
 
 .notes-input {
   width: 100%;
@@ -781,6 +782,37 @@ header {
   color: var(--text);
 }
 
+.tracker-quick-add {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) minmax(180px, 1.2fr) 90px minmax(140px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin: 6px 0 12px;
+}
+
+.tracker-quick-add .text-input,
+.tracker-quick-add .select-input {
+  min-width: 0;
+}
+
+.row-highlight {
+  outline: 2px solid #0ea5e9;
+  outline-offset: -2px;
+  background: #f0f9ff;
+}
+
+@media (max-width: 1120px) {
+  .tracker-quick-add {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .tracker-quick-add {
+    grid-template-columns: 1fr;
+  }
+}
+
 .delete-confirm {
   display: flex;
   align-items: center;
@@ -793,34 +825,3 @@ header {
   margin: 6px 0 0;
 }
 
-/* ── Confirm modal ── */
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-
-.modal-box {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 24px 28px;
-  max-width: 420px;
-  width: 90%;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-}
-
-.modal-message {
-  margin: 0 0 20px;
-  line-height: 1.5;
-}
-
-.modal-actions {
-  display: flex;
-  gap: 10px;
-  justify-content: flex-end;
-}

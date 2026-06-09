@@ -19,3 +19,5 @@ export const NEXT_STEP_OPTIONS = [
   'Follow up with recruiter',
   'Wait for response',
 ]
+
+export const TRACKER_SEARCH_SEED_KEY = 'trackerSearchSeed'

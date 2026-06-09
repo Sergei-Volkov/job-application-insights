@@ -1,15 +1,17 @@
 import { useMemo, useRef, useState } from 'react'
 import DOMPurify from 'dompurify'
 import {
+  extractJobFromUrl,
   fetchApplications,
   generateDocuments,
   readWorkspaceFile,
   updateApplication,
   deleteApplication,
+  upsertApplication,
   writeWorkspaceFile,
   ApiError,
 } from '../api'
-import { NEXT_STEP_OPTIONS, SCORE_STRONG_MIN, SCORE_MEDIUM_MIN } from '../appConstants'
+import { NEXT_STEP_OPTIONS, SCORE_STRONG_MIN, SCORE_MEDIUM_MIN, TRACKER_SEARCH_SEED_KEY } from '../appConstants'
 import type { DiscoveryProfile, EditableRow, GeneratedDocsMap, ListingFilter } from '../appTypes'
 import { getRowDocLinks } from '../utils/docs'
 import { filterApplications, isNewListing, isUpdatedListing, normalizedProfile } from '../utils/listing'
@@ -34,7 +36,11 @@ export default function TrackerPage({ applications, setApplications, setError, s
   const [profileFilter, setProfileFilter] = useState<'all' | DiscoveryProfile>('all')
   const [listingFilter, setListingFilter] = useState<ListingFilter>('all')
   const [sourceFilter, setSourceFilter] = useState('')
-  const [searchQuery, setSearchQuery] = useState('')
+  const [searchQuery, setSearchQuery] = useState(() => {
+    const seeded = localStorage.getItem(TRACKER_SEARCH_SEED_KEY) || ''
+    if (seeded) localStorage.removeItem(TRACKER_SEARCH_SEED_KEY)
+    return seeded
+  })
   const [sortKey, setSortKey] = useState<'company' | 'fit_score' | 'status' | 'follow_up_date' | null>(null)
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [generatedDocsById, setGeneratedDocsById] = useState<GeneratedDocsMap>({})
@@ -49,8 +55,19 @@ export default function TrackerPage({ applications, setApplications, setError, s
   const [lastProcessFileById, setLastProcessFileById] = useState<Record<number, string>>({})
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [addingQuickJob, setAddingQuickJob] = useState(false)
+  const [ingestingQuickUrl, setIngestingQuickUrl] = useState(false)
+  const [quickAddForm, setQuickAddForm] = useState({
+    company: '',
+    role: '',
+    link: '',
+    notes: '',
+    matchProfile: 'de' as DiscoveryProfile,
+  })
+  const [highlightedRowId, setHighlightedRowId] = useState<number | null>(null)
   const editorSectionRef = useRef<HTMLElement | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
+  const rowRefs = useRef<Record<number, HTMLTableRowElement | null>>({})
 
   const loadMore = (): void => {
     setLoadingMore(true)
@@ -62,6 +79,91 @@ export default function TrackerPage({ applications, setApplications, setError, s
 
   const patchLocal = (id: number, patch: Partial<EditableRow>) => {
     setApplications((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)))
+  }
+
+  const focusRowById = (id: number) => {
+    setHighlightedRowId(id)
+    const target = rowRefs.current[id]
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      target.focus()
+    }
+    setTimeout(() => setHighlightedRowId((current) => (current === id ? null : current)), 2200)
+  }
+
+  const quickAddJob = async () => {
+    const company = quickAddForm.company.trim()
+    const role = quickAddForm.role.trim()
+    const link = quickAddForm.link.trim()
+
+    if (!company || !role) {
+      setError('Company and role are required')
+      return
+    }
+
+    setAddingQuickJob(true)
+    setError(null)
+    setSuccessMessage(null)
+    try {
+      const createdOrUpdated = await upsertApplication({
+        company,
+        role,
+        link: link || undefined,
+        notes: quickAddForm.notes,
+        status: 'To review',
+        match_profile: quickAddForm.matchProfile,
+        source: 'manual',
+      })
+      const existed = applications.some((row) => row.id === createdOrUpdated.id)
+
+      setApplications((prev) => {
+        const idx = prev.findIndex((row) => row.id === createdOrUpdated.id)
+        if (idx >= 0) {
+          const next = [...prev]
+          next[idx] = createdOrUpdated
+          return next
+        }
+        return [createdOrUpdated, ...prev]
+      })
+
+      setQuickAddForm((prev) => ({ ...prev, company: '', role: '', link: '', notes: '' }))
+      setSuccessMessage(existed ? 'Job updated in tracker' : 'Job added to tracker')
+      setTimeout(() => focusRowById(createdOrUpdated.id), 0)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to add job from tracker')
+    } finally {
+      setAddingQuickJob(false)
+    }
+  }
+
+  const ingestQuickAddUrl = async () => {
+    const url = quickAddForm.link.trim()
+    if (!url) {
+      setError('Enter a job URL first')
+      return
+    }
+
+    setIngestingQuickUrl(true)
+    setError(null)
+    try {
+      const extracted = await extractJobFromUrl({ url })
+      setQuickAddForm((prev) => {
+        const nextNotes = extracted.description
+          ? (prev.notes.trim() ? `${prev.notes.trim()}\n\n${extracted.description}` : extracted.description)
+          : prev.notes
+        return {
+          ...prev,
+          company: extracted.company || prev.company,
+          role: extracted.role || prev.role,
+          notes: nextNotes,
+        }
+      })
+      setSuccessMessage('URL extracted into quick-add fields')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to extract job URL')
+    } finally {
+      setIngestingQuickUrl(false)
+    }
   }
 
   const handleSortClick = (key: 'company' | 'fit_score' | 'status' | 'follow_up_date') => {
@@ -407,6 +509,67 @@ export default function TrackerPage({ applications, setApplications, setError, s
           </div>
         </div>
 
+        <div className="tracker-quick-add" aria-label="Quick add job form">
+          <input
+            className="text-input"
+            type="text"
+            placeholder="Company"
+            value={quickAddForm.company}
+            onChange={(e) => setQuickAddForm((prev) => ({ ...prev, company: e.target.value }))}
+          />
+          <input
+            className="text-input"
+            type="text"
+            placeholder="Role"
+            value={quickAddForm.role}
+            onChange={(e) => setQuickAddForm((prev) => ({ ...prev, role: e.target.value }))}
+          />
+          <input
+            className="text-input"
+            type="url"
+            placeholder="Job link (optional)"
+            value={quickAddForm.link}
+            onChange={(e) => setQuickAddForm((prev) => ({ ...prev, link: e.target.value }))}
+          />
+          <button
+            className="secondary-btn"
+            disabled={ingestingQuickUrl}
+            onClick={() => { void ingestQuickAddUrl() }}
+            title="Fetch and extract fields from this URL"
+          >
+            {ingestingQuickUrl ? 'Ingesting…' : 'Ingest URL'}
+          </button>
+          <select
+            className="text-input select-input compact-input"
+            value={quickAddForm.matchProfile}
+            onChange={(e) => setQuickAddForm((prev) => ({ ...prev, matchProfile: e.target.value as DiscoveryProfile }))}
+            title="Match profile"
+          >
+            <option value="de">DE</option>
+            <option value="swe">SWE</option>
+            <option value="sre">SRE</option>
+            <option value="other">Other</option>
+          </select>
+          <input
+            className="text-input"
+            type="text"
+            placeholder="Notes (optional)"
+            value={quickAddForm.notes}
+            onChange={(e) => setQuickAddForm((prev) => ({ ...prev, notes: e.target.value }))}
+          />
+          <button
+            className="save-btn"
+            disabled={addingQuickJob}
+            onClick={() => { void quickAddJob() }}
+            title="Add a manual job without leaving Tracker"
+          >
+            {addingQuickJob ? 'Adding…' : 'Quick add'}
+          </button>
+        </div>
+        <p className="muted-mini" style={{ marginTop: '-2px', marginBottom: '10px' }}>
+          Duplicate policy: if link is provided, matching uses link only. If link is blank, matching falls back to company + role.
+        </p>
+
         <div className="table-wrap">
           <table className="apps-table">
             <thead>
@@ -441,7 +604,14 @@ export default function TrackerPage({ applications, setApplications, setError, s
                 const rowDocs = getRowDocLinks(row, generatedDocsById)
                 const scoreBreakdown = parseScoreBreakdown(row)
                 return (
-                  <tr key={row.id}>
+                  <tr
+                    key={row.id}
+                    ref={(node) => {
+                      rowRefs.current[row.id] = node
+                    }}
+                    className={highlightedRowId === row.id ? 'row-highlight' : ''}
+                    tabIndex={-1}
+                  >
                     <td>
                       <input
                         type="checkbox"
@@ -537,44 +707,58 @@ export default function TrackerPage({ applications, setApplications, setError, s
                       />
                     </td>
                     <td>
-                      <button
-                        className="secondary-btn"
-                        title="Save changes for this row"
-                        disabled={!!row.saving}
-                        onClick={() => { void saveRow(row) }}
-                      >
-                        {row.saving ? 'Saving…' : 'Save'}
-                      </button>
-                      <button
-                        className="secondary-btn"
-                        title="Open this role in the editor workflow"
-                        onClick={() => { void startProcessForRow(row) }}
-                      >
-                        Process
-                      </button>
-                      {pendingDeleteId === row.id ? (
-                        <div className="delete-confirm">
-                          <span className="muted-mini">Delete?</span>
-                          <button className="delete-btn" onClick={() => void deleteRow(row)}>Yes</button>
-                          <button
-                            className="secondary-btn"
-                            style={{ fontSize: '0.82rem', padding: '5px 10px' }}
-                            onClick={() => setPendingDeleteId(null)}
+                      <div className="row-actions">
+                        {row.link.trim() ? (
+                          <a
+                            className="link-btn tracker-job-link"
+                            href={row.link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Open original job posting"
                           >
-                            No
-                          </button>
-                        </div>
-                      ) : (
+                            Open job
+                          </a>
+                        ) : (
+                          <span className="muted-mini tracker-no-link">No link</span>
+                        )}
                         <button
-                          className="delete-btn"
-                          title="Permanently delete this application"
+                          className="secondary-btn"
+                          title="Save changes for this row"
                           disabled={!!row.saving}
-                          onClick={() => setPendingDeleteId(row.id)}
-                          style={{ marginTop: '4px' }}
+                          onClick={() => { void saveRow(row) }}
                         >
-                          Delete
+                          {row.saving ? 'Saving…' : 'Save'}
                         </button>
-                      )}
+                        <button
+                          className="secondary-btn"
+                          title="Open this role in the editor workflow"
+                          onClick={() => { void startProcessForRow(row) }}
+                        >
+                          Process
+                        </button>
+                        {pendingDeleteId === row.id ? (
+                          <div className="delete-confirm">
+                            <span className="muted-mini">Delete?</span>
+                            <button className="delete-btn" onClick={() => void deleteRow(row)}>Yes</button>
+                            <button
+                              className="secondary-btn"
+                              style={{ fontSize: '0.82rem', padding: '5px 10px' }}
+                              onClick={() => setPendingDeleteId(null)}
+                            >
+                              No
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            className="delete-btn"
+                            title="Permanently delete this application"
+                            disabled={!!row.saving}
+                            onClick={() => setPendingDeleteId(row.id)}
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 )

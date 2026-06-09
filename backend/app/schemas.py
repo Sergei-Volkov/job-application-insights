@@ -226,3 +226,27 @@ class WorkspaceFileReadResult(BaseModel):
 class WorkspaceFileWriteRequest(BaseModel):
     path: str = Field(max_length=512)
     content: str = Field(max_length=1_000_000)
+
+
+class JobUrlExtractRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=8192)
+
+    @field_validator("url")
+    @classmethod
+    def _validate_url(cls, v: str) -> str:
+        v = v.strip()
+        parsed = urlparse(v)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError("url must be a valid http:// or https:// URL")
+        return v
+
+
+class JobUrlExtractResult(BaseModel):
+    url: str
+    source: str
+    page_title: str
+    company: str
+    role: str
+    location: str
+    remote_type: str
+    description: str

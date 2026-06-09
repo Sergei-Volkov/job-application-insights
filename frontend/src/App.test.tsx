@@ -31,6 +31,7 @@ const apiMocks = vi.hoisted(() => {
     writeWorkspaceFile: vi.fn(),
     deleteApplication: vi.fn(),
     upsertApplication: vi.fn(),
+    extractJobFromUrl: vi.fn(),
   }
 })
 
@@ -208,5 +209,78 @@ describe('App tracker workflow', () => {
     expect(panel!.textContent).toContain('Python, SQL')
     expect(panel!.textContent).toContain('dbt')
     expect(panel!.textContent).toContain('Direct overlap on Python, SQL')
+  })
+
+  it('shows Open job link when present and No link when missing', async () => {
+    apiMocks.fetchApplications.mockResolvedValue({
+      items: [
+        makeRow({ id: 1, link: 'https://example.com/job/with-link' }),
+        makeRow({ id: 2, company: 'NoLink Inc', role: 'Engineer', link: '' }),
+      ],
+      total: 2,
+      limit: 50,
+      offset: 0,
+    })
+
+    render(<App />)
+    await screen.findByText('Application Tracker')
+
+    const openJobLinks = screen.getAllByRole('link', { name: 'Open job' })
+    expect(openJobLinks.length).toBe(1)
+    expect(screen.getByText('No link')).toBeTruthy()
+  })
+
+  it('adds a job via tracker quick add and shows it in table', async () => {
+    apiMocks.fetchApplications.mockResolvedValue({
+      items: [makeRow()],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
+    apiMocks.upsertApplication.mockResolvedValue(
+      makeRow({ id: 7, company: 'Quick Co', role: 'Platform Engineer', link: 'https://example.com/job/quick' })
+    )
+
+    render(<App />)
+    await screen.findByText('Application Tracker')
+
+    const companyInput = screen.getByPlaceholderText('Company')
+    const roleInput = screen.getByPlaceholderText('Role')
+    const linkInput = screen.getByPlaceholderText('Job link (optional)')
+
+    await userEvent.type(companyInput, 'Quick Co')
+    await userEvent.type(roleInput, 'Platform Engineer')
+    await userEvent.type(linkInput, 'https://example.com/job/quick')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Quick add' }))
+
+    await waitFor(() => {
+      expect(apiMocks.upsertApplication).toHaveBeenCalled()
+    })
+    expect(screen.getByText('Quick Co')).toBeTruthy()
+    expect(screen.getByText('Platform Engineer')).toBeTruthy()
+  })
+
+  it('prefills tracker search from seed and clears seed key', async () => {
+    localStorage.setItem('trackerSearchSeed', 'Acme')
+    apiMocks.fetchApplications.mockResolvedValue({
+      items: [
+        makeRow({ id: 1, company: 'Northwind', role: 'Data Engineer' }),
+        makeRow({ id: 2, company: 'Acme Corp', role: 'Backend Engineer' }),
+      ],
+      total: 2,
+      limit: 50,
+      offset: 0,
+    })
+
+    render(<App />)
+    await screen.findByText('Application Tracker')
+
+    const searchInput = screen.getByPlaceholderText(/Search company/i) as HTMLInputElement
+    expect(searchInput.value).toBe('Acme')
+    expect(localStorage.getItem('trackerSearchSeed')).toBeNull()
+
+    expect(screen.getByText('Acme Corp')).toBeTruthy()
+    expect(screen.queryByText('Northwind')).toBeNull()
   })
 })

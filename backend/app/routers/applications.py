@@ -1,4 +1,9 @@
 import json
+import ipaddress
+import re
+from html import unescape
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, func
@@ -8,9 +13,124 @@ from sqlalchemy.orm import Session
 from ..dependencies import get_db, require_write_access
 from ..helpers import listing_fingerprint, normalize_key, today_iso
 from ..models import JobApplication
-from ..schemas import JobApplicationOut, JobApplicationUpdate, JobApplicationUpsert, PaginatedApplications, ScoreBreakdownOut
+from ..schemas import (
+    JobApplicationOut,
+    JobApplicationUpdate,
+    JobApplicationUpsert,
+    JobUrlExtractRequest,
+    JobUrlExtractResult,
+    PaginatedApplications,
+    ScoreBreakdownOut,
+)
 
 router = APIRouter(tags=["applications"])
+
+MAX_EXTRACT_HTML_BYTES = 1_000_000
+
+
+def _detect_remote_type(text: str) -> str:
+    lowered = text.lower()
+    if "hybrid" in lowered:
+        return "Hybrid"
+    if "on-site" in lowered or "onsite" in lowered or "on site" in lowered:
+        return "Onsite"
+    if "remote" in lowered:
+        return "Remote"
+    return ""
+
+
+def _normalize_space(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _extract_title(html: str) -> str:
+    match = re.search(r"<title[^>]*>(.*?)</title>", html, flags=re.IGNORECASE | re.DOTALL)
+    return _normalize_space(unescape(match.group(1))) if match else ""
+
+
+def _extract_meta_description(html: str) -> str:
+    match = re.search(
+        r'<meta[^>]+(?:name|property)=["\'](?:description|og:description)["\'][^>]*content=["\'](.*?)["\']',
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return ""
+    return _normalize_space(unescape(match.group(1)))
+
+
+def _extract_plain_text(html: str) -> str:
+    cleaned = re.sub(r"<script[^>]*>.*?</script>", " ", html, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r"<style[^>]*>.*?</style>", " ", cleaned, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r"<[^>]+>", " ", cleaned)
+    return _normalize_space(unescape(cleaned))
+
+
+def _extract_company_role(page_title: str) -> tuple[str, str]:
+    title = _normalize_space(page_title)
+    if not title:
+        return "", ""
+
+    for token in (" at ", " @ "):
+        lower = title.lower()
+        idx = lower.find(token)
+        if idx > 0:
+            role = title[:idx].strip(" -|:")
+            company = title[idx + len(token) :].strip(" -|:")
+            return company, role
+
+    for sep in (" - ", " | "):
+        parts = [part.strip() for part in title.split(sep) if part.strip()]
+        if len(parts) >= 2:
+            return parts[1], parts[0]
+
+    return "", title
+
+
+def _extract_location(text: str) -> str:
+    match = re.search(r"\b(location|based in|work from)\b[:\-]?\s*([^\.;\n]{2,80})", text, flags=re.IGNORECASE)
+    if not match:
+        return ""
+    return _normalize_space(match.group(2))
+
+
+def _validate_extract_url(url: str) -> None:
+    hostname = urlparse(url).hostname or ""
+    try:
+        ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        return
+
+    if ip.is_private or ip.is_link_local or ip.is_loopback or ip.is_reserved:
+        raise HTTPException(status_code=400, detail="URL host must be publicly routable")
+
+
+def _download_html(url: str) -> tuple[str, str]:
+    request = Request(
+        url,
+        headers={
+            "User-Agent": "JobApplicationInsights/1.0 (+manual-url-extract)",
+            "Accept": "text/html,application/xhtml+xml",
+        },
+    )
+
+    try:
+        with urlopen(request, timeout=10) as response:
+            content_type = (response.headers.get("Content-Type") or "").lower()
+            if "text/html" not in content_type and "application/xhtml+xml" not in content_type:
+                raise HTTPException(status_code=400, detail="URL must point to an HTML page")
+
+            raw = response.read(MAX_EXTRACT_HTML_BYTES + 1)
+            if len(raw) > MAX_EXTRACT_HTML_BYTES:
+                raise HTTPException(status_code=400, detail="Page is too large to extract safely")
+
+            charset = response.headers.get_content_charset() or "utf-8"
+            html = raw.decode(charset, errors="replace")
+            return html, content_type
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Failed to fetch URL: {exc}") from exc
 
 
 
@@ -118,11 +238,10 @@ def _prepare_payload(payload_data: dict, today: str) -> dict:
 
 
 def find_existing_application(db: Session, company: str, role: str, link: str) -> JobApplication | None:
-    existing = None
-    if link:
-        existing = db.query(JobApplication).filter(JobApplication.link == link).first()
-    if existing is not None:
-        return existing
+    # If a link is present, identity is link-only.
+    # Company+role fallback is used only when link is blank.
+    if link.strip():
+        return db.query(JobApplication).filter(JobApplication.link == link).first()
 
     return (
         db.query(JobApplication)
@@ -177,7 +296,10 @@ def list_applications(
     response_model=JobApplicationOut,
     status_code=status.HTTP_201_CREATED,
     summary="Create one application",
-    description="Creates a new application and rejects duplicates by link or by company + role.",
+    description=(
+        "Creates a new application. Duplicate detection is link-first: when link is provided, "
+        "only link is used for matching; when link is missing, company + role is used as fallback."
+    ),
 )
 def create_application(
     payload: JobApplicationUpsert,
@@ -214,7 +336,10 @@ def create_application(
     response_model=JobApplicationOut,
     tags=["imports", "applications"],
     summary="Create or update one application",
-    description="Upserts one application by link, or by company + role when link is missing.",
+    description=(
+        "Upserts one application using link-first matching: provided link updates that exact record; "
+        "when link is missing, company + role matching is used."
+    ),
 )
 def upsert_application(
     payload: JobApplicationUpsert,
@@ -332,3 +457,39 @@ def patch_application(
 
     db.refresh(record)
     return _to_job_application_out(record)
+
+
+@router.post(
+    "/applications/extract-url",
+    response_model=JobUrlExtractResult,
+    tags=["applications", "imports"],
+    summary="Extract job details from a posting URL",
+    description="Fetches an HTML page and extracts lightweight job fields for manual add workflows.",
+)
+def extract_job_from_url(
+    payload: JobUrlExtractRequest,
+    _: None = Depends(require_write_access),
+) -> JobUrlExtractResult:
+    _validate_extract_url(payload.url)
+    html, _content_type = _download_html(payload.url)
+
+    page_title = _extract_title(html)
+    meta_description = _extract_meta_description(html)
+    plain_text = _extract_plain_text(html)
+    description = (meta_description or plain_text)[:6000]
+
+    company, role = _extract_company_role(page_title)
+    source = (urlparse(payload.url).hostname or "").lower().replace("www.", "")
+    location = _extract_location(plain_text[:4000])
+    remote_type = _detect_remote_type(f"{page_title} {meta_description} {plain_text[:2000]}")
+
+    return JobUrlExtractResult(
+        url=payload.url,
+        source=source,
+        page_title=page_title,
+        company=company,
+        role=role,
+        location=location,
+        remote_type=remote_type,
+        description=description,
+    )

@@ -113,6 +113,21 @@ export interface ApplicationUpsert {
   source?: string
 }
 
+export interface JobUrlExtractPayload {
+  url: string
+}
+
+export interface JobUrlExtractResult {
+  url: string
+  source: string
+  page_title: string
+  company: string
+  role: string
+  location: string
+  remote_type: string
+  description: string
+}
+
 export interface DiscoveryRunPayload {
   limit?: number
   min_score?: number
@@ -243,6 +258,8 @@ export const deleteApplication = (id: number) =>
   apiDelete(`/applications/${id}`)
 export const upsertApplication = (payload: ApplicationUpsert) =>
   apiPost<ApplicationItem>('/applications/upsert', payload)
+export const extractJobFromUrl = (payload: JobUrlExtractPayload) =>
+  apiPost<JobUrlExtractResult>('/applications/extract-url', payload)
 export const runDiscovery = (payload: DiscoveryRunPayload) =>
   apiPost<DiscoveryRunResult>('/run-discovery', payload)
 

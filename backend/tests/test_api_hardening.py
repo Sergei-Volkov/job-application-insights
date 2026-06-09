@@ -113,6 +113,245 @@ def test_create_application_rejects_duplicates() -> None:
     assert duplicate.status_code == 409
 
 
+def test_extract_url_parses_basic_job_fields(monkeypatch) -> None:
+    class _FakeHeaders:
+        def get(self, key: str, default: str | None = None) -> str | None:
+            if key.lower() == "content-type":
+                return "text/html; charset=utf-8"
+            return default
+
+        def get_content_charset(self) -> str:
+            return "utf-8"
+
+    class _FakeResponse:
+        headers = _FakeHeaders()
+
+        def read(self, _size: int) -> bytes:
+            return (
+                b"<html><head><title>Senior Data Engineer at Blue Harbor</title>"
+                b"<meta name='description' content='Build robust ETL pipelines in Python and SQL.'/></head>"
+                b"<body><p>Remote position. Location: Germany.</p></body></html>"
+            )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    monkeypatch.setattr("app.routers.applications.urlopen", lambda *args, **kwargs: _FakeResponse())
+
+    response = client.post(
+        "/applications/extract-url",
+        json={"url": "https://example.com/jobs/123"},
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["company"] == "Blue Harbor"
+    assert data["role"] == "Senior Data Engineer"
+    assert data["remote_type"] == "Remote"
+    assert data["source"] == "example.com"
+    assert "Python and SQL" in data["description"]
+
+
+def test_extract_url_rejects_private_ip_host() -> None:
+    response = client.post(
+        "/applications/extract-url",
+        json={"url": "http://10.0.0.1/jobs/123"},
+        headers=_auth_headers(),
+    )
+    assert response.status_code == 400
+    assert "publicly routable" in response.json()["detail"]
+
+
+def test_extract_url_rejects_non_html(monkeypatch) -> None:
+    class _FakeHeaders:
+        def get(self, key: str, default: str | None = None) -> str | None:
+            if key.lower() == "content-type":
+                return "application/pdf"
+            return default
+
+        def get_content_charset(self) -> str:
+            return "utf-8"
+
+    class _FakeResponse:
+        headers = _FakeHeaders()
+
+        def read(self, _size: int) -> bytes:
+            return b"%PDF-1.5"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    monkeypatch.setattr("app.routers.applications.urlopen", lambda *args, **kwargs: _FakeResponse())
+    response = client.post(
+        "/applications/extract-url",
+        json={"url": "https://example.com/file.pdf"},
+        headers=_auth_headers(),
+    )
+    assert response.status_code == 400
+    assert "HTML page" in response.json()["detail"]
+
+
+def test_extract_url_requires_api_key() -> None:
+    response = client.post(
+        "/applications/extract-url",
+        json={"url": "https://example.com/jobs/123"},
+    )
+    assert response.status_code == 401
+
+
+def test_extract_url_rejects_invalid_url_format() -> None:
+    response = client.post(
+        "/applications/extract-url",
+        json={"url": "ftp://example.com/jobs/1"},
+        headers=_auth_headers(),
+    )
+    assert response.status_code == 422
+
+
+def test_extract_url_rejects_oversized_html(monkeypatch) -> None:
+    class _FakeHeaders:
+        def get(self, key: str, default: str | None = None) -> str | None:
+            if key.lower() == "content-type":
+                return "text/html; charset=utf-8"
+            return default
+
+        def get_content_charset(self) -> str:
+            return "utf-8"
+
+    class _FakeResponse:
+        headers = _FakeHeaders()
+
+        def read(self, _size: int) -> bytes:
+            return b"a" * 1_000_002
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    monkeypatch.setattr("app.routers.applications.urlopen", lambda *args, **kwargs: _FakeResponse())
+    response = client.post(
+        "/applications/extract-url",
+        json={"url": "https://example.com/jobs/big"},
+        headers=_auth_headers(),
+    )
+    assert response.status_code == 400
+    assert "too large" in response.json()["detail"]
+
+
+def test_extract_url_handles_timeout(monkeypatch) -> None:
+    monkeypatch.setattr("app.routers.applications.urlopen", lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("timed out")))
+    response = client.post(
+        "/applications/extract-url",
+        json={"url": "https://example.com/jobs/timeout"},
+        headers=_auth_headers(),
+    )
+    assert response.status_code == 422
+    assert "Failed to fetch URL" in response.json()["detail"]
+
+
+def test_extract_url_falls_back_when_title_and_meta_missing(monkeypatch) -> None:
+    class _FakeHeaders:
+        def get(self, key: str, default: str | None = None) -> str | None:
+            if key.lower() == "content-type":
+                return "text/html; charset=utf-8"
+            return default
+
+        def get_content_charset(self) -> str:
+            return "utf-8"
+
+    class _FakeResponse:
+        headers = _FakeHeaders()
+
+        def read(self, _size: int) -> bytes:
+            return b"<html><body><h1>Platform Engineer opening</h1><p>Hybrid role in Berlin.</p></body></html>"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    monkeypatch.setattr("app.routers.applications.urlopen", lambda *args, **kwargs: _FakeResponse())
+    response = client.post(
+        "/applications/extract-url",
+        json={"url": "https://example.com/jobs/no-meta"},
+        headers=_auth_headers(),
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["company"] == ""
+    assert data["role"] == ""
+    assert "Platform Engineer" in data["description"]
+    assert data["remote_type"] == "Hybrid"
+
+
+def test_create_application_allows_same_company_role_with_different_links() -> None:
+    _clear_db()
+
+    first = client.post(
+        "/applications", json=_base_payload(link="https://example.com/job/create-a"), headers=_auth_headers()
+    )
+    assert first.status_code == 201
+
+    second = client.post(
+        "/applications", json=_base_payload(link="https://example.com/job/create-b"), headers=_auth_headers()
+    )
+    assert second.status_code == 201
+    assert second.json()["id"] != first.json()["id"]
+
+
+def test_upsert_allows_same_company_role_with_different_links() -> None:
+    _clear_db()
+
+    first = client.post(
+        "/applications/upsert", json=_base_payload(link="https://example.com/job/upsert-a"), headers=_auth_headers()
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        "/applications/upsert", json=_base_payload(link="https://example.com/job/upsert-b"), headers=_auth_headers()
+    )
+    assert second.status_code == 200
+    assert second.json()["id"] != first.json()["id"]
+
+    listed = client.get("/applications?limit=50")
+    assert listed.status_code == 200
+    assert len(listed.json()["items"]) == 2
+
+
+def test_upsert_without_link_falls_back_to_company_role() -> None:
+    _clear_db()
+
+    first = client.post(
+        "/applications/upsert",
+        json=_base_payload(link="", status="To review"),
+        headers=_auth_headers(),
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        "/applications/upsert",
+        json=_base_payload(link="", status="Interview"),
+        headers=_auth_headers(),
+    )
+    assert second.status_code == 200
+    assert second.json()["id"] == first.json()["id"]
+    assert second.json()["status"] == "Interview"
+
+    listed = client.get("/applications?limit=50")
+    assert listed.status_code == 200
+    assert len(listed.json()["items"]) == 1
+
+
 def test_status_filter_is_exact_match_case_insensitive() -> None:
     _clear_db()
 

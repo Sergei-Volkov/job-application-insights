@@ -10,6 +10,7 @@ const apiMocks = vi.hoisted(() => ({
   runDiscovery: vi.fn(),
   fetchDiscoveryStatus: vi.fn(),
   upsertApplication: vi.fn(),
+  extractJobFromUrl: vi.fn(),
 }))
 
 vi.mock('../api', () => apiMocks)
@@ -45,6 +46,7 @@ function renderDiscoveryPage() {
   const setSuccessMessage = vi.fn()
   const setLoading = vi.fn()
   const onRunComplete = vi.fn().mockResolvedValue(undefined)
+  const onOpenTracker = vi.fn()
 
   render(
     <DiscoveryPage
@@ -52,10 +54,11 @@ function renderDiscoveryPage() {
       setSuccessMessage={setSuccessMessage}
       setLoading={setLoading}
       onRunComplete={onRunComplete}
+      onOpenTracker={onOpenTracker}
     />
   )
 
-  return { setError, setSuccessMessage, setLoading, onRunComplete }
+  return { setError, setSuccessMessage, setLoading, onRunComplete, onOpenTracker }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -229,5 +232,45 @@ describe('DiscoveryPage', () => {
       const parsed = JSON.parse(stored!) as Record<string, unknown>
       expect(Number(parsed.limit)).toBe(20)
     })
+  })
+
+  it('ingests manual URL and prefills company/role', async () => {
+    apiMocks.extractJobFromUrl.mockResolvedValue({
+      url: 'https://example.com/jobs/42',
+      source: 'example.com',
+      page_title: 'Data Engineer at Acme',
+      company: 'Acme',
+      role: 'Data Engineer',
+      location: 'Remote',
+      remote_type: 'Remote',
+      description: 'Build ELT pipelines.',
+    })
+    renderDiscoveryPage()
+
+    await userEvent.type(screen.getByPlaceholderText('Job link (optional)'), 'https://example.com/jobs/42')
+    await userEvent.click(screen.getByRole('button', { name: 'Ingest URL' }))
+
+    await waitFor(() => expect(apiMocks.extractJobFromUrl).toHaveBeenCalledOnce())
+    const companyInput = screen.getByPlaceholderText('Company') as HTMLInputElement
+    const roleInput = screen.getByPlaceholderText('Role') as HTMLInputElement
+    expect(companyInput.value).toBe('Acme')
+    expect(roleInput.value).toBe('Data Engineer')
+  })
+
+  it('shows Open in Tracker action after manual add', async () => {
+    apiMocks.upsertApplication.mockResolvedValue({})
+    const { onOpenTracker } = renderDiscoveryPage()
+
+    expect(screen.queryByRole('button', { name: 'Open in Tracker' })).toBeNull()
+
+    await userEvent.type(screen.getByPlaceholderText('Company'), 'Acme')
+    await userEvent.type(screen.getByPlaceholderText('Role'), 'Backend Engineer')
+    await userEvent.click(screen.getByRole('button', { name: /add job/i }))
+
+    const openTrackerBtn = await screen.findByRole('button', { name: 'Open in Tracker' })
+    await userEvent.click(openTrackerBtn)
+
+    expect(localStorage.getItem('trackerSearchSeed')).toBe('Acme Backend Engineer')
+    expect(onOpenTracker).toHaveBeenCalled()
   })
 })
