@@ -66,6 +66,64 @@ def _extract_plain_text(html: str) -> str:
     return _normalize_space(unescape(cleaned))
 
 
+def _json_to_text(value: object) -> str:
+    if isinstance(value, dict):
+        parts = [_json_to_text(item) for item in value.values()]
+        return _normalize_space(" ".join(part for part in parts if part))
+    if isinstance(value, list):
+        parts = [_json_to_text(item) for item in value]
+        return _normalize_space(" ".join(part for part in parts if part))
+    if isinstance(value, str):
+        return _normalize_space(unescape(value))
+    return ""
+
+
+def _extract_structured_scripts(html: str) -> list[str]:
+    scripts = re.findall(
+        r'<script[^>]*type=["\'](?:application/ld\+json|application/json)["\'][^>]*>(.*?)</script>',
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    scripts.extend(
+        re.findall(r'<script[^>]*id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>', html, flags=re.IGNORECASE | re.DOTALL)
+    )
+
+    return [unescape(raw_script).strip() for raw_script in scripts if unescape(raw_script).strip()]
+
+
+def _extract_structured_text_from_scripts(scripts: list[str]) -> str:
+
+    parts: list[str] = []
+    for raw_script in scripts:
+        try:
+            parsed = json.loads(raw_script)
+        except json.JSONDecodeError:
+            parts.append(_normalize_space(raw_script))
+            continue
+        text = _json_to_text(parsed)
+        if text:
+            parts.append(text)
+    return _normalize_space(" ".join(part for part in parts if part))
+
+
+def _extract_structured_field(scripts: list[str], field_names: tuple[str, ...], fallback_keys: tuple[str, ...] = ()) -> str:
+    combined = " ".join(scripts)
+    for field_name in field_names:
+        if fallback_keys:
+            for fallback_key in fallback_keys:
+                match = re.search(
+                    rf'"{fallback_key}"\s*:\s*\{{.*?"{field_name}"\s*:\s*"(.*?)"',
+                    combined,
+                    flags=re.IGNORECASE | re.DOTALL,
+                )
+                if match:
+                    return _normalize_space(unescape(match.group(1)))
+        match = re.search(rf'"{field_name}"\s*:\s*"(.*?)"', combined, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            return _normalize_space(unescape(match.group(1)))
+    return ""
+
+
 def _extract_company_role(page_title: str) -> tuple[str, str]:
     title = _normalize_space(page_title)
     if not title:
@@ -475,13 +533,28 @@ def extract_job_from_url(
 
     page_title = _extract_title(html)
     meta_description = _extract_meta_description(html)
+    structured_scripts = _extract_structured_scripts(html)
+    structured_text = _extract_structured_text_from_scripts(structured_scripts)
     plain_text = _extract_plain_text(html)
-    description = (meta_description or plain_text)[:6000]
+    description = (meta_description or structured_text or plain_text)[:6000]
 
-    company, role = _extract_company_role(page_title)
+    company = _extract_structured_field(structured_scripts, ("name",), ("hiringOrganization", "organization", "employer", "company", "brand"))
+    role = _extract_structured_field(structured_scripts, ("jobTitle", "headline", "title"))
+    if not company or not role:
+        fallback_company, fallback_role = _extract_company_role(page_title)
+        company = company or fallback_company
+        role = role or fallback_role
+    if not company and not role:
+        company, role = _extract_company_role(structured_text or meta_description or plain_text)
     source = (urlparse(payload.url).hostname or "").lower().replace("www.", "")
-    location = _extract_location(plain_text[:4000])
-    remote_type = _detect_remote_type(f"{page_title} {meta_description} {plain_text[:2000]}")
+    location = _extract_structured_field(
+        structured_scripts,
+        ("addressLocality", "addressRegion", "addressCountry"),
+        ("jobLocation", "address"),
+    )
+    if not location:
+        location = _extract_location(f"{structured_text} {plain_text[:4000]}")
+    remote_type = _detect_remote_type(f"{page_title} {meta_description} {structured_text} {plain_text[:2000]}")
 
     return JobUrlExtractResult(
         url=payload.url,

@@ -107,6 +107,8 @@ export interface ApplicationUpsert {
   company: string
   role: string
   link?: string
+  location?: string
+  remote_type?: string
   notes?: string
   status?: string
   match_profile?: string

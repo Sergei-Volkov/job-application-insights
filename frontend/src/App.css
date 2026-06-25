@@ -756,12 +756,20 @@ header {
 .search-wrap {
   position: relative;
   flex: 1;
-  min-width: 160px;
-  max-width: 340px;
+  min-width: 220px;
+  max-width: 420px;
 }
 
 .search-wrap .text-input {
   padding-right: 28px;
+  min-width: 0;
+  width: 100%;
+}
+
+.search-wrap .text-input::placeholder {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .search-clear-btn {
@@ -792,6 +800,39 @@ header {
 
 .tracker-quick-add .text-input,
 .tracker-quick-add .select-input {
+  min-width: 0;
+}
+
+.tracker-quick-add .quick-add-full {
+  grid-column: 1 / -1;
+}
+
+.tracker-quick-add input[placeholder="Location (optional)"],
+.tracker-quick-add input[placeholder="Remote type (optional)"] {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+
+.tracker-quick-add .notes-input {
+  grid-column: 1 / -1;
+  min-height: 88px;
+}
+
+.tracker-quick-add .ingest-summary {
+  grid-column: 1 / -1;
+  margin-top: -2px;
+}
+
+.pagination-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.pagination-bar .muted-mini {
   min-width: 0;
 }
 

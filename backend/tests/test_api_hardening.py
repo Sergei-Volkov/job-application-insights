@@ -289,9 +289,54 @@ def test_extract_url_falls_back_when_title_and_meta_missing(monkeypatch) -> None
     assert response.status_code == 200
     data = response.json()
     assert data["company"] == ""
-    assert data["role"] == ""
+    assert "Platform Engineer" in data["role"]
     assert "Platform Engineer" in data["description"]
     assert data["remote_type"] == "Hybrid"
+
+
+def test_extract_url_uses_structured_job_data(monkeypatch) -> None:
+    class _FakeHeaders:
+        def get(self, key: str, default: str | None = None) -> str | None:
+            if key.lower() == "content-type":
+                return "text/html; charset=utf-8"
+            return default
+
+        def get_content_charset(self) -> str:
+            return "utf-8"
+
+    class _FakeResponse:
+        headers = _FakeHeaders()
+
+        def read(self, _size: int) -> bytes:
+            return (
+                b"<html><head><title>Job posting</title>"
+                b"<script type='application/ld+json'>"
+                b'{"@type":"JobPosting","title":"Data Engineer","description":"Build pipelines and dashboards.",'
+                b'"hiringOrganization":{"name":"RAVLCO"},'
+                b'"jobLocation":{"address":{"addressLocality":"Berlin"}},'
+                b'"employmentType":"REMOTE"}'
+                b"</script></head><body></body></html>"
+            )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    monkeypatch.setattr("app.routers.applications.urlopen", lambda *args, **kwargs: _FakeResponse())
+    response = client.post(
+        "/applications/extract-url",
+        json={"url": "https://example.com/jobs/structured"},
+        headers=_auth_headers(),
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["company"] == "RAVLCO"
+    assert data["role"] == "Data Engineer"
+    assert data["location"] == "Berlin"
+    assert data["remote_type"] == "Remote"
+    assert "Build pipelines" in data["description"]
 
 
 def test_create_application_allows_same_company_role_with_different_links() -> None:

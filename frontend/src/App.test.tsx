@@ -261,6 +261,74 @@ describe('App tracker workflow', () => {
     expect(screen.getByText('Platform Engineer')).toBeTruthy()
   })
 
+  it('ingests a job URL into visible quick-add fields before saving', async () => {
+    apiMocks.fetchApplications.mockResolvedValue({
+      items: [makeRow()],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
+    apiMocks.extractJobFromUrl.mockResolvedValue({
+      url: 'https://example.com/job/quick',
+      source: 'example.com',
+      page_title: 'Platform Engineer at Quick Co',
+      company: 'Quick Co',
+      role: 'Platform Engineer',
+      location: 'Remote',
+      remote_type: 'Remote',
+      description: 'Build reliable data pipelines and tooling.',
+    })
+    apiMocks.upsertApplication.mockResolvedValue(
+      makeRow({
+        id: 7,
+        company: 'Quick Co',
+        role: 'Platform Engineer',
+        link: 'https://example.com/job/quick',
+      })
+    )
+
+    render(<App />)
+    await screen.findByText('Application Tracker')
+
+    const companyInput = screen.getByPlaceholderText('Company') as HTMLInputElement
+    const roleInput = screen.getByPlaceholderText('Role') as HTMLInputElement
+    const linkInput = screen.getByPlaceholderText('Job link (optional)') as HTMLInputElement
+    const locationInput = screen.getByPlaceholderText('Location (optional)') as HTMLInputElement
+    const remoteTypeInput = screen.getByPlaceholderText('Remote type (optional)') as HTMLInputElement
+    const notesInput = screen.getByPlaceholderText('Notes (optional)') as HTMLTextAreaElement
+
+    await userEvent.type(linkInput, 'https://example.com/job/quick')
+    await userEvent.click(screen.getByRole('button', { name: 'Ingest URL' }))
+
+    await waitFor(() => {
+      expect(apiMocks.extractJobFromUrl).toHaveBeenCalledWith({ url: 'https://example.com/job/quick' })
+    })
+
+    expect(companyInput.value).toBe('Quick Co')
+    expect(roleInput.value).toBe('Platform Engineer')
+    expect(locationInput.value).toBe('Remote')
+    expect(remoteTypeInput.value).toBe('Remote')
+    expect(notesInput.value).toContain('Build reliable data pipelines and tooling.')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Quick add' }))
+
+    await waitFor(() => {
+      expect(apiMocks.upsertApplication).toHaveBeenCalledWith(
+        expect.objectContaining({
+          company: 'Quick Co',
+          role: 'Platform Engineer',
+          link: 'https://example.com/job/quick',
+          location: 'Remote',
+          remote_type: 'Remote',
+          notes: expect.stringContaining('Build reliable data pipelines and tooling.'),
+          status: 'To review',
+          match_profile: 'de',
+          source: 'manual',
+        })
+      )
+    })
+  })
+
   it('prefills tracker search from seed and clears seed key', async () => {
     localStorage.setItem('trackerSearchSeed', 'Acme')
     apiMocks.fetchApplications.mockResolvedValue({

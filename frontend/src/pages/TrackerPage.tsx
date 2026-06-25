@@ -61,6 +61,8 @@ export default function TrackerPage({ applications, setApplications, setError, s
     company: '',
     role: '',
     link: '',
+    location: '',
+    remoteType: '',
     notes: '',
     matchProfile: 'de' as DiscoveryProfile,
   })
@@ -109,6 +111,8 @@ export default function TrackerPage({ applications, setApplications, setError, s
         company,
         role,
         link: link || undefined,
+        location: quickAddForm.location.trim(),
+        remote_type: quickAddForm.remoteType.trim(),
         notes: quickAddForm.notes,
         status: 'To review',
         match_profile: quickAddForm.matchProfile,
@@ -155,6 +159,8 @@ export default function TrackerPage({ applications, setApplications, setError, s
           ...prev,
           company: extracted.company || prev.company,
           role: extracted.role || prev.role,
+          location: extracted.location || prev.location,
+          remoteType: extracted.remote_type || prev.remoteType,
           notes: nextNotes,
         }
       })
@@ -551,8 +557,21 @@ export default function TrackerPage({ applications, setApplications, setError, s
             <option value="other">Other</option>
           </select>
           <input
-            className="text-input"
+            className="text-input quick-add-full"
             type="text"
+            placeholder="Location (optional)"
+            value={quickAddForm.location}
+            onChange={(e) => setQuickAddForm((prev) => ({ ...prev, location: e.target.value }))}
+          />
+          <input
+            className="text-input quick-add-full"
+            type="text"
+            placeholder="Remote type (optional)"
+            value={quickAddForm.remoteType}
+            onChange={(e) => setQuickAddForm((prev) => ({ ...prev, remoteType: e.target.value }))}
+          />
+          <textarea
+            className="notes-input"
             placeholder="Notes (optional)"
             value={quickAddForm.notes}
             onChange={(e) => setQuickAddForm((prev) => ({ ...prev, notes: e.target.value }))}
@@ -565,6 +584,9 @@ export default function TrackerPage({ applications, setApplications, setError, s
           >
             {addingQuickJob ? 'Adding…' : 'Quick add'}
           </button>
+          <div className="ingest-summary muted-mini">
+            <span>Ingested fields are copied into Company, Role, Location, Remote type, and Notes when present.</span>
+          </div>
         </div>
         <p className="muted-mini" style={{ marginTop: '-2px', marginBottom: '10px' }}>
           Duplicate policy: if link is provided, matching uses link only. If link is blank, matching falls back to company + role.
@@ -765,16 +787,16 @@ export default function TrackerPage({ applications, setApplications, setError, s
               })}
             </tbody>
           </table>
-          <div className="pagination-bar">
-            <span className="muted-mini">{filteredApplications.length} shown of {applications.length} loaded</span>
-            <button
-              className="btn-secondary"
-              onClick={loadMore}
-              disabled={loadingMore}
-            >
-              {loadingMore ? 'Loading…' : 'Load more'}
-            </button>
-          </div>
+        </div>
+        <div className="pagination-bar">
+          <span className="muted-mini">{filteredApplications.length} shown of {applications.length} loaded</span>
+          <button
+            className="secondary-btn"
+            onClick={loadMore}
+            disabled={loadingMore}
+          >
+            {loadingMore ? 'Loading…' : 'Load more'}
+          </button>
         </div>
       </section>
 
